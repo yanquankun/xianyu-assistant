@@ -112,27 +112,83 @@ describe('reduceWorkflow', () => {
     expect(state).toEqual(parsing);
   });
 
-  it('AI 扩写先保存预览，只有应用动作才修改草稿', () => {
-    const editing = { ...initialWorkflowState, phase: 'editing' as const, draft };
-    const previewed = reduceWorkflow(editing, {
+  it('AI 结果直接写回标题描述并合并去重警告', () => {
+    const started = reduceWorkflow(
+      { ...initialWorkflowState, phase: 'editing' as const, draft },
+      {
+        type: 'EXPANSION_STARTED',
+        draftId: draft.id,
+        draftUpdatedAt: draft.updatedAt
+      }
+    );
+    const result = reduceWorkflow(started, {
       type: 'EXPANSION_RECEIVED',
+      draftId: draft.id,
+      draftUpdatedAt: draft.updatedAt,
       preview: {
         title: '扩写标题',
         description: '扩写描述',
+        warnings: ['信息不足'],
+        factWarnings: ['信息不足', '出现新数字']
+      },
+      now: '2026-08-31T13:10:00.000Z'
+    });
+
+    expect(result.draft).toEqual({
+      ...draft,
+      title: '扩写标题',
+      description: '扩写描述',
+      warnings: ['信息不足', '出现新数字'],
+      updatedAt: '2026-08-31T13:10:00.000Z'
+    });
+    expect(result.statusMessage).toBe('AI 文案已写入表单');
+  });
+
+  it('草稿已编辑时丢弃迟到的 AI 结果', () => {
+    const changed = { ...draft, title: '用户刚修改', updatedAt: 'newer' };
+    const expanding = {
+      ...initialWorkflowState,
+      phase: 'expanding' as const,
+      draft: changed,
+      expansionTarget: { draftId: draft.id, draftUpdatedAt: draft.updatedAt }
+    };
+
+    const result = reduceWorkflow(expanding, {
+      type: 'EXPANSION_RECEIVED',
+      draftId: draft.id,
+      draftUpdatedAt: draft.updatedAt,
+      preview: {
+        title: '迟到标题',
+        description: '迟到描述',
         warnings: [],
         factWarnings: []
+      },
+      now: '2026-08-31T13:10:00.000Z'
+    });
+
+    expect(result).toBe(expanding);
+    expect(result.draft?.title).toBe('用户刚修改');
+  });
+
+  it('AI 扩写失败时保留原草稿并恢复编辑状态', () => {
+    const started = reduceWorkflow(
+      { ...initialWorkflowState, phase: 'editing' as const, draft },
+      {
+        type: 'EXPANSION_STARTED',
+        draftId: draft.id,
+        draftUpdatedAt: draft.updatedAt
       }
+    );
+    const result = reduceWorkflow(started, {
+      type: 'EXPANSION_FAILED',
+      draftId: draft.id,
+      draftUpdatedAt: draft.updatedAt,
+      message: '扩写服务暂不可用'
     });
 
-    expect(previewed.draft?.title).toBe('解析标题');
-    expect(previewed.expansionPreview?.title).toBe('扩写标题');
-
-    const applied = reduceWorkflow(previewed, {
-      type: 'EXPANSION_APPLIED',
-      now: '2026-08-31T10:05:00.000Z'
-    });
-    expect(applied.draft?.title).toBe('扩写标题');
-    expect(applied.expansionPreview).toBeNull();
+    expect(result.draft).toEqual(draft);
+    expect(result.phase).toBe('editing');
+    expect(result.errorMessage).toBe('扩写服务暂不可用');
   });
 
   it('并发图片加载事件基于最新草稿顺序合并，不互相覆盖', () => {

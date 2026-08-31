@@ -19,7 +19,6 @@ import type { OperationLogEntry } from '../storage/operation-log';
 import type { FillResult } from '../xianyu/fill';
 import type { XianyuLoginState } from '../xianyu/login';
 import { AiSettingsForm } from './components/AiSettingsForm';
-import { ExpansionPreview } from './components/ExpansionPreview';
 import { LoginBanner } from './components/LoginBanner';
 import { OperationLog } from './components/OperationLog';
 import { ProductEditor } from './components/ProductEditor';
@@ -181,12 +180,26 @@ export function App({ services }: { services: SidePanelServices }) {
     if (state.draft === null) {
       return;
     }
-    dispatch({ type: 'EXPANSION_STARTED' });
+    const draft = state.draft;
+    const draftId = draft.id;
+    const draftUpdatedAt = draft.updatedAt;
+    dispatch({ type: 'EXPANSION_STARTED', draftId, draftUpdatedAt });
     try {
-      const preview = await services.expandDraft(settings, state.draft);
-      dispatch({ type: 'EXPANSION_RECEIVED', preview });
+      const preview = await services.expandDraft(settings, draft);
+      dispatch({
+        type: 'EXPANSION_RECEIVED',
+        draftId,
+        draftUpdatedAt,
+        preview,
+        now: new Date().toISOString()
+      });
     } catch (error) {
-      dispatch({ type: 'OPERATION_FAILED', message: errorMessage(error) });
+      dispatch({
+        type: 'EXPANSION_FAILED',
+        draftId,
+        draftUpdatedAt,
+        message: errorMessage(error)
+      });
     }
   };
 
@@ -509,15 +522,6 @@ export function App({ services }: { services: SidePanelServices }) {
               />
             )}
 
-            {state.expansionPreview === null ? null : (
-              <ExpansionPreview
-                preview={state.expansionPreview}
-                onApply={() =>
-                  dispatch({ type: 'EXPANSION_APPLIED', now: new Date().toISOString() })
-                }
-                onDiscard={() => dispatch({ type: 'EXPANSION_DISCARDED' })}
-              />
-            )}
           </>
         ) : null}
 
@@ -541,9 +545,13 @@ export function App({ services }: { services: SidePanelServices }) {
             className="button button--secondary"
             type="button"
             disabled={expansionDisabled}
+            aria-busy={state.phase === 'expanding'}
             onClick={() => void expandDraft()}
           >
-            AI 扩写
+            {state.phase === 'expanding' ? (
+              <span className="media-preview-spinner" aria-hidden="true" />
+            ) : null}
+            {state.phase === 'expanding' ? 'AI 扩写中' : 'AI 扩写'}
           </button>
           <button
             className="button button--primary button--wide"

@@ -127,6 +127,38 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: '填入闲鱼' })).toBeDisabled();
   });
 
+  it('AI 扩写加载时禁用按钮，完成后直接写回表单', async () => {
+    const expansion = createDeferred<{
+      title: string;
+      description: string;
+      warnings: string[];
+      factWarnings: string[];
+    }>();
+    render(<App services={createServices({ expandDraft: () => expansion.promise })} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '手动填写' }));
+    const title = await screen.findByLabelText('商品标题');
+    fireEvent.change(title, { target: { value: '扩写前标题' } });
+    fireEvent.change(screen.getByLabelText('商品描述'), { target: { value: '扩写前描述' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'AI 扩写' }));
+
+    const loadingButton = screen.getByRole('button', { name: 'AI 扩写中' });
+    expect(loadingButton).toBeDisabled();
+    expect(loadingButton).toHaveAttribute('aria-busy', 'true');
+
+    expansion.resolve({
+      title: '扩写后标题',
+      description: '扩写后描述',
+      warnings: [],
+      factWarnings: []
+    });
+
+    expect(await screen.findByDisplayValue('扩写后标题')).toBeVisible();
+    expect(screen.getByDisplayValue('扩写后描述')).toBeVisible();
+    expect(screen.queryByText('AI 文案预览')).toBeNull();
+  });
+
   it('手动输入负原价时不把无效数值写入草稿', async () => {
     render(<App services={createServices()} />);
     fireEvent.click(screen.getByRole('button', { name: '手动填写' }));

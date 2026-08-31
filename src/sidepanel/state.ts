@@ -12,7 +12,10 @@ export interface WorkflowState {
   activeOperationId: string | null;
   sourceUrl: string;
   draft: ProductDraft | null;
-  expansionPreview: ExpansionPreview | null;
+  expansionTarget: {
+    draftId: string;
+    draftUpdatedAt: string;
+  } | null;
   loginState: XianyuLoginState;
   statusMessage: string;
   errorMessage: string | null;
@@ -38,10 +41,15 @@ export type WorkflowAction =
   | { type: 'IMAGE_REMOVED'; id: string; now: string }
   | { type: 'VIDEO_REPLACED'; draftId?: string; video: ProductVideo; now: string }
   | { type: 'VIDEO_REMOVED'; now: string }
-  | { type: 'EXPANSION_STARTED' }
-  | { type: 'EXPANSION_RECEIVED'; preview: ExpansionPreview }
-  | { type: 'EXPANSION_APPLIED'; now: string }
-  | { type: 'EXPANSION_DISCARDED' }
+  | { type: 'EXPANSION_STARTED'; draftId: string; draftUpdatedAt: string }
+  | {
+      type: 'EXPANSION_RECEIVED';
+      draftId: string;
+      draftUpdatedAt: string;
+      preview: ExpansionPreview;
+      now: string;
+    }
+  | { type: 'EXPANSION_FAILED'; draftId: string; draftUpdatedAt: string; message: string }
   | { type: 'LOGIN_STATE_CHANGED'; loginState: XianyuLoginState }
   | { type: 'FILL_STARTED' }
   | { type: 'FILL_FINISHED'; message: string }
@@ -53,7 +61,7 @@ export const initialWorkflowState: WorkflowState = {
   activeOperationId: null,
   sourceUrl: '',
   draft: null,
-  expansionPreview: null,
+  expansionTarget: null,
   loginState: 'unknown',
   statusMessage: '粘贴淘宝或京东商品链接开始整理',
   errorMessage: null
@@ -132,7 +140,7 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
         ...state,
         phase: 'editing',
         draft: createDraft(action.product, action.operationId, action.now),
-        expansionPreview: null,
+        expansionTarget: null,
         statusMessage: '商品信息已解析，请检查并编辑',
         errorMessage: null
       };
@@ -157,12 +165,12 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
             loadStatus: image.location.kind === 'remote' ? 'idle' : image.loadStatus
           }))
         },
-        expansionPreview: null,
+        expansionTarget: null,
         statusMessage: '已恢复本地草稿',
         errorMessage: null
       };
     case 'DRAFT_CHANGED':
-      return { ...state, draft: action.draft, phase: 'editing' };
+      return { ...state, draft: action.draft, expansionTarget: null, phase: 'editing' };
     case 'IMAGE_SELECTION_TOGGLED':
       if (state.draft === null) {
         return state;
@@ -177,6 +185,7 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
       return {
         ...state,
         phase: 'editing',
+        expansionTarget: null,
         draft: {
           ...state.draft,
           images: state.draft.images.map((image) =>
@@ -192,6 +201,7 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
       return {
         ...state,
         phase: 'editing',
+        expansionTarget: null,
         draft: {
           ...state.draft,
           images: state.draft.images.map((image) =>
@@ -220,6 +230,7 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
         return {
           ...state,
           phase: 'editing',
+          expansionTarget: null,
           draft: {
             ...state.draft,
             images: [...state.draft.images, ...accepted],
@@ -240,6 +251,7 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
       return {
         ...state,
         phase: 'editing',
+        expansionTarget: null,
         draft: {
           ...state.draft,
           images: state.draft.images.filter((image) => image.id !== action.id),
@@ -255,6 +267,7 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
       return {
         ...state,
         phase: 'editing',
+        expansionTarget: null,
         draft: { ...state.draft, video: action.video, updatedAt: action.now },
         statusMessage: '视频已保存',
         errorMessage: null
@@ -269,37 +282,76 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
         return {
           ...state,
           phase: 'editing',
+          expansionTarget: null,
           draft,
           statusMessage: '视频已移除',
           errorMessage: null
         };
       }
     case 'EXPANSION_STARTED':
-      return { ...state, phase: 'expanding', statusMessage: 'AI 正在整理文案', errorMessage: null };
-    case 'EXPANSION_RECEIVED':
-      return {
-        ...state,
-        phase: 'editing',
-        expansionPreview: action.preview,
-        statusMessage: 'AI 文案已生成，请先预览'
-      };
-    case 'EXPANSION_APPLIED':
-      if (state.draft === null || state.expansionPreview === null) {
+      if (
+        state.draft?.id !== action.draftId ||
+        state.draft.updatedAt !== action.draftUpdatedAt
+      ) {
         return state;
       }
       return {
         ...state,
+        phase: 'expanding',
+        expansionTarget: {
+          draftId: action.draftId,
+          draftUpdatedAt: action.draftUpdatedAt
+        },
+        statusMessage: 'AI 正在整理文案',
+        errorMessage: null
+      };
+    case 'EXPANSION_RECEIVED':
+      {
+        const draft = state.draft;
+        const expansionTarget = state.expansionTarget;
+      if (
+        draft?.id !== action.draftId ||
+        draft.updatedAt !== action.draftUpdatedAt ||
+        expansionTarget?.draftId !== action.draftId ||
+        expansionTarget.draftUpdatedAt !== action.draftUpdatedAt
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        phase: 'editing',
+        expansionTarget: null,
         draft: {
-          ...state.draft,
-          title: state.expansionPreview.title,
-          description: state.expansionPreview.description,
+          ...draft,
+          title: action.preview.title,
+          description: action.preview.description,
+          warnings: [...new Set([...draft.warnings, ...action.preview.warnings, ...action.preview.factWarnings])],
           updatedAt: action.now
         },
-        expansionPreview: null,
-        statusMessage: '已应用 AI 文案'
+        statusMessage: 'AI 文案已写入表单',
+        errorMessage: null
       };
-    case 'EXPANSION_DISCARDED':
-      return { ...state, expansionPreview: null, statusMessage: '已保留原文案' };
+      }
+    case 'EXPANSION_FAILED':
+      {
+        const draft = state.draft;
+        const expansionTarget = state.expansionTarget;
+      if (
+        draft?.id !== action.draftId ||
+        draft.updatedAt !== action.draftUpdatedAt ||
+        expansionTarget?.draftId !== action.draftId ||
+        expansionTarget.draftUpdatedAt !== action.draftUpdatedAt
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        phase: 'editing',
+        expansionTarget: null,
+        statusMessage: 'AI 扩写失败',
+        errorMessage: action.message
+      };
+      }
     case 'LOGIN_STATE_CHANGED':
       return { ...state, loginState: action.loginState };
     case 'FILL_STARTED':
