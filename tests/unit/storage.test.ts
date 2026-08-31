@@ -97,6 +97,21 @@ describe('createLocalStore', () => {
     await expect(store.getDraft()).resolves.toMatchObject({ title: '编辑标题' });
   });
 
+  it('保存并恢复提交短链和最终规范 URL，旧草稿缺少提交 URL 仍兼容', async () => {
+    const store = createLocalStore(new MemoryStorageArea());
+    await store.saveDraft({ ...draft, submittedUrl: 'https://3.cn/short?jkl=@code@' });
+
+    await expect(store.getDraft()).resolves.toMatchObject({
+      submittedUrl: 'https://3.cn/short?jkl=@code@',
+      canonicalUrl: 'https://item.jd.com/1.html'
+    });
+
+    await store.saveDraft(draft);
+    await expect(store.getDraft()).resolves.toMatchObject({
+      canonicalUrl: 'https://item.jd.com/1.html'
+    });
+  });
+
   it('存储中没有值时返回安全默认值', async () => {
     const store = createLocalStore(new MemoryStorageArea());
 

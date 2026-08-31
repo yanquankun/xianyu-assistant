@@ -73,6 +73,7 @@ function createDraft(product: ParsedProduct, id: string, now: string): ProductDr
   return {
     id,
     platform: product.platform,
+    ...(product.submittedUrl === undefined ? {} : { submittedUrl: product.submittedUrl }),
     canonicalUrl: product.canonicalUrl,
     source: {
       title: product.title,

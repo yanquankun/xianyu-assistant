@@ -1,15 +1,25 @@
-import { parseProductDocument } from '../src/parsers/common';
+import { extractProductDocument } from '../src/parsers/common';
 
 interface ExtractProductDocumentMessage {
   type: 'EXTRACT_PRODUCT_DOCUMENT';
+  hintedTitle?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isExtractMessage(value: unknown): value is ExtractProductDocumentMessage {
+  if (!isRecord(value)) {
+    return false;
+  }
   return (
-    typeof value === 'object' &&
-    value !== null &&
-    'type' in value &&
-    value.type === 'EXTRACT_PRODUCT_DOCUMENT'
+    value.type === 'EXTRACT_PRODUCT_DOCUMENT' &&
+    Object.keys(value).every((key) => key === 'type' || key === 'hintedTitle') &&
+    (value.hintedTitle === undefined ||
+      (typeof value.hintedTitle === 'string' &&
+        value.hintedTitle.trim().length > 0 &&
+        value.hintedTitle.length <= 500))
   );
 }
 
@@ -25,7 +35,7 @@ export default defineUnlistedScript(() => {
     if (!isExtractMessage(message) || sender.id !== browser.runtime.id) {
       return undefined;
     }
-    sendResponse(parseProductDocument(document, window.location.href));
+    sendResponse(extractProductDocument(document, window.location.href, message.hintedTitle));
     return true;
   });
 });

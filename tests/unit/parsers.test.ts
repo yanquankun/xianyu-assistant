@@ -4,7 +4,11 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { getRemoteImageUrl } from '../../src/domain/product';
-import { parseProductDocument } from '../../src/parsers/common';
+import {
+  detectProductPageError,
+  extractProductDocument,
+  parseProductDocument
+} from '../../src/parsers/common';
 
 function parseFixture(name: string, pageUrl: string) {
   const html = readFileSync(resolve(process.cwd(), 'tests', 'fixtures', name), 'utf8');
@@ -98,6 +102,110 @@ describe('parseProductDocument', () => {
     const result = parseProductDocument(document, 'https://shop.example.com/product/many-images');
 
     expect(result.images).toHaveLength(20);
-    expect(getRemoteImageUrl(result.images.at(-1)!)).toBe('https://shop.example.com/image-20.jpg');
+    const finalImage = result.images.at(-1);
+    expect(finalImage).toBeDefined();
+    expect(finalImage === undefined ? null : getRemoteImageUrl(finalImage)).toBe(
+      'https://shop.example.com/image-20.jpg'
+    );
+  });
+
+  it.each([
+    ['HTTP Status 400 – Bad Request', 'HTTP_400'],
+    ['HTTP Status 403 – Forbidden', 'HTTP_403'],
+    ['404 Not Found', 'HTTP_404'],
+    ['HTTP Status 500 – Internal Server Error', 'HTTP_500'],
+    ['页面不存在', 'PAGE_ERROR'],
+    ['访问出错', 'PAGE_ERROR'],
+    ['系统繁忙', 'PAGE_ERROR']
+  ])('在候选解析前拒绝错误页标题：%s', (title, code) => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html><html><head><title>${title}</title></head><body>${title}</body></html>`,
+      'text/html'
+    );
+
+    expect(detectProductPageError(document, 'https://item.jd.com/product/100.html')).toMatchObject({
+      code
+    });
+    const result = extractProductDocument(
+      document,
+      'https://item.jd.com/product/100.html',
+      '分享文案标题'
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error('错误页不应产生商品');
+    }
+    expect(result.error.code).toBe(code);
+    expect(JSON.stringify(result)).not.toContain(title);
+  });
+
+  it.each([
+    ['https://item.jd.com/product/100.html', 'jd'],
+    ['https://item.taobao.com/item.htm?id=1', 'taobao'],
+    ['https://detail.tmall.com/item.htm?id=1', 'taobao']
+  ] as const)('仅在有效 %s 商品路由缺少真实标题时使用分享标题', (pageUrl, platform) => {
+    const document = new DOMParser().parseFromString(
+      '<!doctype html><html><body></body></html>',
+      'text/html'
+    );
+    const result = extractProductDocument(document, pageUrl, '分享文案标题');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error('有效商品页应产生商品');
+    }
+    expect(result.product.platform).toBe(platform);
+    expect(result.product.title).toBe('分享文案标题');
+    expect(result.product.price).toBeNull();
+    expect(result.product.images).toEqual([]);
+    expect(result.product.warnings).toContain('标题来自分享文案，请核对');
+  });
+
+  it('真实页面标题优先于分享标题', () => {
+    const document = new DOMParser().parseFromString(
+      '<!doctype html><html><head><title>真实页面标题</title></head></html>',
+      'text/html'
+    );
+    const result = extractProductDocument(
+      document,
+      'https://item.jd.com/product/100.html',
+      '分享文案标题'
+    );
+
+    expect(result).toMatchObject({ ok: true, product: { title: '真实页面标题' } });
+    expect(JSON.stringify(result)).not.toContain('标题来自分享文案，请核对');
+  });
+
+  it.each(['请输入验证码以继续访问', '请完成安全验证', '检测到访问风险，请完成验证', '扫码登录后继续']) (
+    'DOM 正文指向验证或登录页面时拒绝分享标题：%s',
+    (bodyText) => {
+      const document = new DOMParser().parseFromString(
+        `<!doctype html><html><body>${bodyText}</body></html>`,
+        'text/html'
+      );
+      const result = extractProductDocument(
+        document,
+        'https://item.jd.com/product/100.html',
+        '不得使用的分享标题'
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: 'VERIFICATION_REQUIRED' }
+      });
+      expect(JSON.stringify(result)).not.toContain('不得使用的分享标题');
+    }
+  );
+
+  it.each([
+    'https://shop.example.com/product/100',
+    'https://item.jd.com/login',
+    'https://item.jd.com/verify/captcha',
+    'https://item.jd.com/error/400.html'
+  ])('普通页、登录页、验证页或错误路由不得使用分享标题：%s', (pageUrl) => {
+    const document = new DOMParser().parseFromString('<!doctype html><html><body></body></html>', 'text/html');
+    const result = extractProductDocument(document, pageUrl, '不得使用的标题');
+
+    expect(JSON.stringify(result)).not.toContain('不得使用的标题');
   });
 });

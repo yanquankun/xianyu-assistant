@@ -200,6 +200,30 @@ describe('reduceWorkflow', () => {
     expect(state.draft).toEqual(draft);
   });
 
+  it('解析成功草稿同时保留提交短链和最终规范 URL', () => {
+    const parsing = reduceWorkflow(initialWorkflowState, {
+      type: 'PARSE_STARTED',
+      operationId: 'short-link-operation',
+      url: 'https://3.cn/short'
+    });
+
+    const state = reduceWorkflow(parsing, {
+      type: 'PARSE_SUCCEEDED',
+      operationId: 'short-link-operation',
+      product: {
+        ...parsedProduct,
+        submittedUrl: 'https://3.cn/short',
+        canonicalUrl: 'https://item.jd.com/product/1.html'
+      },
+      now: '2026-08-31T10:00:00.000Z'
+    });
+
+    expect(state.draft).toMatchObject({
+      submittedUrl: 'https://3.cn/short',
+      canonicalUrl: 'https://item.jd.com/product/1.html'
+    });
+  });
+
   it('旧解析结果不能覆盖较新的操作', () => {
     const parsing = {
       ...initialWorkflowState,

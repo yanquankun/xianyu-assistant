@@ -43,7 +43,8 @@ function snapshotFromDraft(
   overrides: Partial<Pick<OperationDraftSnapshot, 'title' | 'description'>> = {}
 ): OperationDraftSnapshot {
   return {
-    sourceUrl: draft.canonicalUrl,
+    sourceUrl: draft.submittedUrl ?? draft.canonicalUrl,
+    canonicalUrl: draft.canonicalUrl,
     title: overrides.title ?? draft.title,
     description: overrides.description ?? draft.description,
     ...(draft.price === null ? {} : { price: draft.price }),
@@ -119,7 +120,8 @@ function buildSuccessDetails(message: RuntimeMessage, value: unknown): {
         message: '商品解析完成',
         details: {
           draft: {
-            sourceUrl: product.canonicalUrl,
+            sourceUrl: message.submittedUrl,
+            canonicalUrl: product.canonicalUrl,
             title: product.title,
             description: product.description,
             ...(product.price === null ? {} : { price: product.price }),

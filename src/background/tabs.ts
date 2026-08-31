@@ -90,3 +90,20 @@ export async function withTemporaryTab<T>(
     await dependencies.remove(tab.id);
   }
 }
+
+export async function withSourceTab<T>(
+  dependencies: TemporaryTabDependencies,
+  tabs: readonly BrowserTab[],
+  url: string,
+  operation: (tab: BrowserTab) => Promise<T>
+): Promise<T> {
+  const selection = selectSourceTab(tabs, url);
+  if (selection.kind === 'reuse') {
+    const tab = tabs.find((candidate) => candidate.id === selection.tabId);
+    if (tab === undefined) {
+      throw new Error('无法读取已有商品标签页');
+    }
+    return operation(tab);
+  }
+  return withTemporaryTab(dependencies, url, operation);
+}

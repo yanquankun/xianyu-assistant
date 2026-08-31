@@ -1,6 +1,7 @@
 import type { AiSettings } from './settings';
 import type {
   ParsedProduct,
+  ProductExtractionResponse,
   ProductDraft,
   ProductImage,
   ProductImageLocation,
@@ -10,7 +11,13 @@ import type {
 } from './product';
 
 export type RuntimeMessage =
-  | { type: 'PARSE_PRODUCT'; operationId: string; url: string }
+  | {
+      type: 'PARSE_PRODUCT';
+      operationId: string;
+      submittedUrl: string;
+      url: string;
+      hintedTitle?: string;
+    }
   | { type: 'TEST_AI_CONNECTION'; settings: AiSettings }
   | { type: 'EXPAND_DRAFT'; settings: AiSettings; draft: ProductDraft }
   | { type: 'CHECK_XIANYU_LOGIN' }
@@ -30,6 +37,11 @@ const MAX_IMAGES = 20;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const allowedKeys = new Set(allowed);
+  return Object.keys(value).every((key) => allowedKeys.has(key));
 }
 
 function isText(value: unknown, maximum: number, allowEmpty = true): value is string {
@@ -144,6 +156,7 @@ export function isProductDraft(value: unknown): value is ProductDraft {
     isText(value.id, 200, false) &&
     typeof value.platform === 'string' &&
     ['taobao', 'jd', 'generic'].includes(value.platform) &&
+    (value.submittedUrl === undefined || isHttpUrl(value.submittedUrl)) &&
     isText(value.canonicalUrl, 4_096) &&
     isSourceFacts(value.source) &&
     isText(value.title, 500) &&
@@ -231,6 +244,7 @@ export function parseParsedProduct(value: unknown): ParsedProduct | null {
   return isRecord(value) &&
     typeof value.platform === 'string' &&
     ['taobao', 'jd', 'generic'].includes(value.platform) &&
+    (value.submittedUrl === undefined || isHttpUrl(value.submittedUrl)) &&
     isText(value.canonicalUrl, 4_096) &&
     isText(value.title, 500) &&
     isText(value.description, 20_000) &&
@@ -247,14 +261,51 @@ export function parseParsedProduct(value: unknown): ParsedProduct | null {
     : null;
 }
 
+export function parseProductExtractionResponse(value: unknown): ProductExtractionResponse | null {
+  if (!isRecord(value) || typeof value.ok !== 'boolean') {
+    return null;
+  }
+  if (value.ok) {
+    const product = parseParsedProduct(value.product);
+    return product === null ? null : { ok: true, product };
+  }
+  if (!isRecord(value.error) || !isText(value.error.message, 1_000, false)) {
+    return null;
+  }
+  const keys = Object.keys(value.error);
+  if (keys.some((key) => key !== 'message' && key !== 'code')) {
+    return null;
+  }
+  if (value.error.code !== undefined && !isText(value.error.code, 100, false)) {
+    return null;
+  }
+  return {
+    ok: false,
+    error: {
+      message: value.error.message,
+      ...(value.error.code === undefined ? {} : { code: value.error.code })
+    }
+  };
+}
+
 export function parseRuntimeMessage(value: unknown): RuntimeMessage | null {
   if (!isRecord(value) || !isText(value.type, 100, false)) {
     return null;
   }
   switch (value.type) {
     case 'PARSE_PRODUCT':
-      return isText(value.operationId, 200, false) && isText(value.url, 4_096, false)
-        ? { type: value.type, operationId: value.operationId, url: value.url }
+      return hasOnlyKeys(value, ['type', 'operationId', 'submittedUrl', 'url', 'hintedTitle']) &&
+        isText(value.operationId, 200, false) &&
+        isHttpUrl(value.submittedUrl) &&
+        isHttpUrl(value.url) &&
+        (value.hintedTitle === undefined || isText(value.hintedTitle, 500, false))
+        ? {
+            type: value.type,
+            operationId: value.operationId,
+            submittedUrl: value.submittedUrl,
+            url: value.url,
+            ...(value.hintedTitle === undefined ? {} : { hintedTitle: value.hintedTitle })
+          }
         : null;
     case 'TEST_AI_CONNECTION':
       return isAiSettings(value.settings) ? { type: value.type, settings: value.settings } : null;

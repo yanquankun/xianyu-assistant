@@ -51,6 +51,7 @@ export interface SourceProductFacts {
 export interface ProductDraft {
   id: string;
   platform: ProductPlatform;
+  submittedUrl?: string;
   canonicalUrl: string;
   source: SourceProductFacts;
   title: string;
@@ -69,6 +70,7 @@ export interface ProductDraft {
 
 export interface ParsedProduct {
   platform: ProductPlatform;
+  submittedUrl?: string;
   canonicalUrl: string;
   title: string;
   description: string;
@@ -79,6 +81,15 @@ export interface ParsedProduct {
   warnings: string[];
   confidence: ExtractionConfidence;
 }
+
+export interface ProductExtractionError {
+  message: string;
+  code?: string;
+}
+
+export type ProductExtractionResponse =
+  | { ok: true; product: ParsedProduct }
+  | { ok: false; error: ProductExtractionError };
 
 export function getRemoteImageUrl(image: ProductImage): string | null {
   return image.location.kind === 'remote' ? image.location.url : null;

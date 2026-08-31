@@ -4,6 +4,7 @@ export type OperationOutcome = 'success' | 'failure' | 'warning';
 
 export interface OperationDraftSnapshot {
   sourceUrl?: string;
+  canonicalUrl?: string;
   title?: string;
   description?: string;
   price?: number;
@@ -138,6 +139,8 @@ function sanitizeHttpUrl(value: string): string | undefined {
 
 function sanitizeDraftSnapshot(draft: OperationDraftSnapshot): OperationDraftSnapshot | undefined {
   const sourceUrl = draft.sourceUrl === undefined ? undefined : sanitizeHttpUrl(draft.sourceUrl);
+  const canonicalUrl =
+    draft.canonicalUrl === undefined ? undefined : sanitizeHttpUrl(draft.canonicalUrl);
   const title = draft.title === undefined ? undefined : sanitizeText(draft.title, MAX_LOG_TITLE_LENGTH);
   const description =
     draft.description === undefined ? undefined : sanitizeText(draft.description, MAX_LOG_TEXT_LENGTH);
@@ -164,6 +167,7 @@ function sanitizeDraftSnapshot(draft: OperationDraftSnapshot): OperationDraftSna
       : undefined;
   const sanitized = {
     ...(sourceUrl === undefined ? {} : { sourceUrl }),
+    ...(canonicalUrl === undefined ? {} : { canonicalUrl }),
     ...(title === undefined ? {} : { title }),
     ...(description === undefined ? {} : { description }),
     ...(price === undefined ? {} : { price }),
@@ -225,6 +229,9 @@ function parseDraftSnapshot(value: unknown): OperationDraftSnapshot | undefined 
     return undefined;
   }
   const sourceUrl = isBoundedText(value.sourceUrl, 4_096, false) ? value.sourceUrl : undefined;
+  const canonicalUrl = isBoundedText(value.canonicalUrl, 4_096, false)
+    ? value.canonicalUrl
+    : undefined;
   const title = isBoundedText(value.title, MAX_LOG_TITLE_LENGTH) ? value.title : undefined;
   const description = isBoundedText(value.description, MAX_LOG_TEXT_LENGTH) ? value.description : undefined;
   const price = typeof value.price === 'number' && Number.isFinite(value.price) ? value.price : undefined;
@@ -245,6 +252,7 @@ function parseDraftSnapshot(value: unknown): OperationDraftSnapshot | undefined 
   const videoName = isBoundedText(value.videoName, MAX_LOG_TITLE_LENGTH) ? value.videoName : undefined;
   return sanitizeDraftSnapshot({
     ...(sourceUrl === undefined ? {} : { sourceUrl }),
+    ...(canonicalUrl === undefined ? {} : { canonicalUrl }),
     ...(title === undefined ? {} : { title }),
     ...(description === undefined ? {} : { description }),
     ...(price === undefined ? {} : { price }),

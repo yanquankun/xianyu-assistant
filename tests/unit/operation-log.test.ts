@@ -47,6 +47,7 @@ describe('sanitizeLogEntry', () => {
         warnings: ['https://user:pass@example.com/item', 'Bearer warning-secret'],
         draft: {
           sourceUrl: 'https://user:pass@example.com/item',
+          canonicalUrl: 'https://user:pass@example.com/final',
           title: '标题',
           description: '描述',
           selectedImageCount: 1,
@@ -61,6 +62,23 @@ describe('sanitizeLogEntry', () => {
       /title-secret|detail-secret|error-secret|warning-secret|settings-secret|asset-secret|blob:|<html|user:pass/u
     );
     expect(sanitized.details?.draft?.sourceUrl).toBe('https://example.com/item');
+    expect(sanitized.details?.draft?.canonicalUrl).toBe('https://example.com/final');
+  });
+
+  it('旧日志缺少规范 URL 时继续兼容', () => {
+    const entry = parseOperationLogEntry({
+      id: 'old-dual-url-log',
+      timestamp: '2026-08-31T13:00:00.000Z',
+      stage: 'parse',
+      outcome: 'success',
+      message: '旧版解析完成',
+      details: { draft: { sourceUrl: 'https://item.jd.com/1.html', title: '旧商品' } }
+    });
+
+    expect(entry?.details?.draft).toEqual({
+      sourceUrl: 'https://item.jd.com/1.html',
+      title: '旧商品'
+    });
   });
 
   it('保留旧版最小记录并丢弃格式无效的详情', () => {

@@ -56,6 +56,38 @@ const draft: ProductDraft = {
 };
 
 describe('operation log factory', () => {
+  it('解析成功快照同时保留提交短链和最终规范 URL', () => {
+    const entry = createSuccessLogEntry(
+      {
+        type: 'PARSE_PRODUCT',
+        operationId: 'parse-1',
+        submittedUrl: 'https://3.cn/short?jkl=@code@',
+        url: 'https://3.cn/short?jkl=@code@',
+        hintedTitle: '分享标题'
+      },
+      {
+        platform: 'jd',
+        submittedUrl: 'https://3.cn/short?jkl=@code@',
+        canonicalUrl: 'https://item.jd.com/product/1.html',
+        title: '真实标题',
+        description: '',
+        price: null,
+        currency: 'CNY',
+        images: [],
+        warnings: [],
+        confidence: 'low'
+      },
+      'parse-log',
+      '2026-08-31T14:00:00.000Z'
+    );
+
+    expect(entry.details?.draft).toMatchObject({
+      sourceUrl: 'https://3.cn/short?jkl=@code@',
+      canonicalUrl: 'https://item.jd.com/product/1.html'
+    });
+    expect(JSON.stringify(entry)).not.toContain('分享标题');
+  });
+
   it('AI 成功记录使用生成标题并保存不可变表单快照', () => {
     const inputDraft: ProductDraft = {
       ...draft,
@@ -81,6 +113,7 @@ describe('operation log factory', () => {
       details: {
         draft: {
           sourceUrl: 'https://item.jd.com/1.html',
+          canonicalUrl: 'https://item.jd.com/1.html',
           title: '当时生成的标题',
           description: '当时生成的描述',
           price: 88,

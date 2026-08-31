@@ -1,10 +1,26 @@
 import { createAiClient } from '../ai/client';
 import { checkXianyuLoginFromTabs } from './login-check';
 import { createFailureLogEntry, createSuccessLogEntry } from './operation-log-factory';
-import { ensureProductDestination, normalizeHttpUrl } from './permissions';
-import { selectSourceTab, selectXianyuLoginTab, selectXianyuTab, type BrowserTab } from './tabs';
+import { normalizeHttpUrl } from './permissions';
+import {
+  waitForTabSettled,
+  type SettledBrowserTab,
+  type TabRemovedListener,
+  type TabSettledDependencies,
+  type TabUpdatedListener
+} from './tab-settle';
+import {
+  selectXianyuLoginTab,
+  selectXianyuTab,
+  withSourceTab,
+  type BrowserTab
+} from './tabs';
 import type { AppError, AppErrorCode, OperationResult } from '../domain/errors';
-import { parseParsedProduct, parseRuntimeMessage, type RuntimeMessage } from '../domain/messages';
+import {
+  parseProductExtractionResponse,
+  parseRuntimeMessage,
+  type RuntimeMessage
+} from '../domain/messages';
 import type { ParsedProduct, ProductDraft } from '../domain/product';
 import { createLocalStore, type StorageAreaLike } from '../storage/local-store';
 import { createMediaStore } from '../storage/media-store';
@@ -105,6 +121,68 @@ async function waitForTabComplete(tabId: number): Promise<void> {
   });
 }
 
+function tabSettleDependencies(): TabSettledDependencies {
+  const updatedWrappers = new Map<TabUpdatedListener, Parameters<typeof browser.tabs.onUpdated.addListener>[0]>();
+  const removedWrappers = new Map<TabRemovedListener, Parameters<typeof browser.tabs.onRemoved.addListener>[0]>();
+  return {
+    async get(tabId): Promise<SettledBrowserTab> {
+      const tab = await browser.tabs.get(tabId);
+      return {
+        id: tab.id ?? tabId,
+        ...(tab.url === undefined ? {} : { url: tab.url }),
+        ...(tab.status === undefined ? {} : { status: tab.status })
+      };
+    },
+    onUpdated: {
+      addListener(listener): void {
+        const wrapper: Parameters<typeof browser.tabs.onUpdated.addListener>[0] = (
+          tabId,
+          changeInfo,
+          tab
+        ) => {
+          listener(
+            tabId,
+            {
+              ...(changeInfo.status === undefined ? {} : { status: changeInfo.status }),
+              ...(changeInfo.url === undefined ? {} : { url: changeInfo.url })
+            },
+            {
+              id: tab.id ?? tabId,
+              ...(tab.url === undefined ? {} : { url: tab.url }),
+              ...(tab.status === undefined ? {} : { status: tab.status })
+            }
+          );
+        };
+        updatedWrappers.set(listener, wrapper);
+        browser.tabs.onUpdated.addListener(wrapper);
+      },
+      removeListener(listener): void {
+        const wrapper = updatedWrappers.get(listener);
+        if (wrapper !== undefined) {
+          browser.tabs.onUpdated.removeListener(wrapper);
+          updatedWrappers.delete(listener);
+        }
+      }
+    },
+    onRemoved: {
+      addListener(listener): void {
+        const wrapper: Parameters<typeof browser.tabs.onRemoved.addListener>[0] = (tabId) => {
+          listener(tabId);
+        };
+        removedWrappers.set(listener, wrapper);
+        browser.tabs.onRemoved.addListener(wrapper);
+      },
+      removeListener(listener): void {
+        const wrapper = removedWrappers.get(listener);
+        if (wrapper !== undefined) {
+          browser.tabs.onRemoved.removeListener(wrapper);
+          removedWrappers.delete(listener);
+        }
+      }
+    }
+  };
+}
+
 function xianyuTabDependencies(): XianyuTabDependencies {
   return {
     listTabs,
@@ -150,49 +228,64 @@ function xianyuContentDependencies(): XianyuContentDependencies {
   };
 }
 
-async function extractProductFromTab(tabId: number): Promise<ParsedProduct> {
+async function extractProductFromTab(
+  tabId: number,
+  hintedTitle?: string
+): Promise<ParsedProduct> {
   await browser.scripting.executeScript({
     target: { tabId },
     files: ['/product-extractor.js']
   });
   const response: unknown = await browser.tabs.sendMessage(tabId, {
-    type: 'EXTRACT_PRODUCT_DOCUMENT'
+    type: 'EXTRACT_PRODUCT_DOCUMENT',
+    ...(hintedTitle === undefined ? {} : { hintedTitle })
   });
-  const product = parseParsedProduct(response);
-  if (product === null) {
+  const extraction = parseProductExtractionResponse(response);
+  if (extraction === null) {
     throw new Error('商品解析结果格式无效');
   }
-  return product;
+  if (!extraction.ok) {
+    throw new Error(extraction.error.message);
+  }
+  return extraction.product;
 }
 
-async function parseProduct(url: string): Promise<ParsedProduct> {
-  const normalized = normalizeHttpUrl(url);
+async function parseProduct(message: Extract<RuntimeMessage, { type: 'PARSE_PRODUCT' }>): Promise<ParsedProduct> {
+  const normalized = normalizeHttpUrl(message.url);
   const tabs = await listTabs();
-  const selection = selectSourceTab(tabs, normalized.href);
-  if (selection.kind === 'reuse') {
-    await waitForTabComplete(selection.tabId);
-    const tab = await browser.tabs.get(selection.tabId);
-    if (tab.url === undefined) {
-      throw new Error('无法读取商品页地址');
+  return withSourceTab(
+    {
+      async create(url, active): Promise<BrowserTab> {
+        const tab = await browser.tabs.create({ url, active });
+        const mapped = toBrowserTab(tab);
+        if (mapped === null) {
+          throw new Error('无法创建商品解析标签页');
+        }
+        return mapped;
+      },
+      remove: (tabId) => browser.tabs.remove(tabId)
+    },
+    tabs,
+    normalized.href,
+    async (sourceTab) => {
+      const settled = await waitForTabSettled(
+        tabSettleDependencies(),
+        sourceTab.id,
+        normalized.href,
+        { quietMs: 800, timeoutMs: TAB_LOAD_TIMEOUT_MS }
+      );
+      if (settled.url === undefined) {
+        throw new Error('无法读取商品页地址');
+      }
+      const canonicalUrl = normalizeHttpUrl(settled.url).href;
+      const product = await extractProductFromTab(sourceTab.id, message.hintedTitle);
+      return {
+        ...product,
+        submittedUrl: message.submittedUrl,
+        canonicalUrl
+      };
     }
-    ensureProductDestination(normalized, tab.url);
-    return extractProductFromTab(selection.tabId);
-  }
-  const created = await browser.tabs.create({ url: normalized.href, active: false });
-  if (created.id === undefined) {
-    throw new Error('无法创建商品解析标签页');
-  }
-  try {
-    await waitForTabComplete(created.id);
-    const tab = await browser.tabs.get(created.id);
-    if (tab.url === undefined) {
-      throw new Error('无法读取商品页地址');
-    }
-    ensureProductDestination(normalized, tab.url);
-    return await extractProductFromTab(created.id);
-  } finally {
-    await browser.tabs.remove(created.id).catch(() => undefined);
-  }
+  );
 }
 
 async function checkXianyuLogin(): Promise<XianyuLoginCheckResult> {
@@ -378,7 +471,7 @@ async function handleRuntimeMessage(message: RuntimeMessage): Promise<OperationR
     let value: unknown;
     switch (message.type) {
       case 'PARSE_PRODUCT':
-        value = await parseProduct(message.url);
+        value = await parseProduct(message);
         break;
       case 'TEST_AI_CONNECTION':
         value = await aiClient.testConnection(message.settings);

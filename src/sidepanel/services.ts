@@ -1,7 +1,12 @@
 import { normalizeChatCompletionsUrl, type AiConnectionResult } from '../ai/client';
 import { createFailureLogEntry } from '../background/operation-log-factory';
 import type { ExpansionPreview } from '../ai/validation';
-import { getRequestedOrigin, normalizeHttpUrl } from '../background/permissions';
+import {
+  getProductPermissionOrigins,
+  getRequestedOrigin,
+  normalizeHttpUrl
+} from '../background/permissions';
+import { parseProductInput } from '../background/product-input';
 import type { OperationResult } from '../domain/errors';
 import type { RuntimeMessage } from '../domain/messages';
 import { getRemoteImageUrl, type ParsedProduct, type ProductDraft } from '../domain/product';
@@ -149,13 +154,16 @@ export function createBrowserSidePanelServices(): SidePanelServices {
     },
 
     async parseProduct(url: string): Promise<ParsedProduct> {
-      const normalized = normalizeHttpUrl(url);
+      const input = parseProductInput(url);
+      const normalized = normalizeHttpUrl(input.submittedUrl);
       const message: RuntimeMessage = {
         type: 'PARSE_PRODUCT',
         operationId: operationId(),
-        url: normalized.href
+        submittedUrl: input.submittedUrl,
+        url: normalized.href,
+        ...(input.hintedTitle === undefined ? {} : { hintedTitle: input.hintedTitle })
       };
-      await requestOriginsWithLog(store, [getRequestedOrigin(normalized.url)], message);
+      await requestOriginsWithLog(store, getProductPermissionOrigins(normalized.url), message);
       return send<ParsedProduct>(message);
     },
 
