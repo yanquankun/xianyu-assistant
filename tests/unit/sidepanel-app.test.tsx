@@ -16,6 +16,19 @@ const parsedProduct: ParsedProduct = {
   confidence: 'high'
 };
 
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function createServices(overrides: Partial<SidePanelServices> = {}): SidePanelServices {
   return {
     loadSettings: () => Promise.resolve(null),
@@ -244,5 +257,269 @@ describe('App', () => {
 
     expect(await screen.findByText('最新解析已完成')).toBeVisible();
     expect(calls).toBeGreaterThanOrEqual(2);
+  });
+
+  it('无 MIME 的 MOV 视频按校验后的 MIME 保存并替换旧视频', async () => {
+    const savedMimeTypes: string[] = [];
+    const deleted: string[] = [];
+    const storedDraft = {
+      id: 'stored-video',
+      platform: 'generic' as const,
+      canonicalUrl: '',
+      source: { title: '', description: '', price: null, currency: 'CNY' },
+      title: '',
+      description: '',
+      price: null,
+      currency: 'CNY',
+      images: [],
+      video: {
+        id: 'local-old-video',
+        assetId: 'asset-old-video',
+        fileName: 'old.mp4',
+        mimeType: 'video/mp4' as const,
+        byteLength: 3
+      },
+      warnings: [],
+      confidence: 'low' as const,
+      shippingMethod: '包邮',
+      categoryNote: '',
+      updatedAt: '2026-08-31T12:00:00.000Z'
+    };
+    render(
+      <App
+        services={createServices({
+          loadDraft: () => Promise.resolve(storedDraft),
+          saveMedia: (file, kind) => {
+            savedMimeTypes.push(file.type);
+            return Promise.resolve({
+              assetId: 'asset-new-video',
+              kind,
+              fileName: file.name,
+              mimeType: file.type,
+              byteLength: file.size,
+              createdAt: '2026-08-31T13:00:00.000Z'
+            });
+          },
+          deleteMedia: (assetId) => {
+            deleted.push(assetId);
+            return Promise.resolve();
+          }
+        })}
+      />
+    );
+
+    await screen.findByText(/old.mp4/);
+    fireEvent.change(screen.getByLabelText('上传商品视频'), {
+      target: { files: [new File(['video'], 'NEW.MOV', { type: '' })] }
+    });
+
+    await waitFor(() => expect(savedMimeTypes).toEqual(['video/quicktime']));
+    expect(await screen.findByText(/NEW.MOV/)).toBeVisible();
+    expect(deleted).toContain('asset-old-video');
+  });
+
+  it('图片保存期间名额变满时删除已保存但不能加入的资产', async () => {
+    const save = createDeferred<{
+      assetId: string;
+      kind: 'image';
+      fileName: string;
+      mimeType: string;
+      byteLength: number;
+      createdAt: string;
+    }>();
+    const deleted: string[] = [];
+    const storedDraft = {
+      id: 'stored-images',
+      platform: 'generic' as const,
+      canonicalUrl: '',
+      source: { title: '', description: '', price: null, currency: 'CNY' },
+      title: '',
+      description: '',
+      price: null,
+      currency: 'CNY',
+      images: Array.from({ length: 8 }, (_, index) => ({
+        id: `selected-${String(index)}`,
+        location: {
+          kind: 'remote' as const,
+          url: `https://img.example.com/${String(index)}.jpg`,
+          extractedBy: 'dom' as const
+        },
+        selected: true,
+        loadStatus: 'loaded' as const
+      })).concat({
+        id: 'last-slot',
+        location: {
+          kind: 'remote' as const,
+          url: 'https://img.example.com/last.jpg',
+          extractedBy: 'dom' as const
+        },
+        selected: false,
+        loadStatus: 'loaded' as const
+      }),
+      warnings: [],
+      confidence: 'low' as const,
+      shippingMethod: '包邮',
+      categoryNote: '',
+      updatedAt: '2026-08-31T12:00:00.000Z'
+    };
+    render(
+      <App
+        services={createServices({
+          loadDraft: () => Promise.resolve(storedDraft),
+          saveMedia: () => save.promise,
+          deleteMedia: (assetId) => {
+            deleted.push(assetId);
+            return Promise.resolve();
+          }
+        })}
+      />
+    );
+
+    await screen.findByRole('checkbox', { name: '选择商品图片 9' });
+    fireEvent.change(screen.getByLabelText('上传商品图片'), {
+      target: { files: [new File(['image'], 'new.png', { type: 'image/png' })] }
+    });
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择商品图片 9' }));
+    save.resolve({
+      assetId: 'asset-late-image',
+      kind: 'image',
+      fileName: 'new.png',
+      mimeType: 'image/png',
+      byteLength: 5,
+      createdAt: '2026-08-31T13:00:00.000Z'
+    });
+
+    await waitFor(() => expect(deleted).toContain('asset-late-image'));
+    expect(screen.queryByText('new.png')).toBeNull();
+  });
+
+  it('草稿切换后删除迟到图片保存产生的资产', async () => {
+    const save = createDeferred<{
+      assetId: string;
+      kind: 'image';
+      fileName: string;
+      mimeType: string;
+      byteLength: number;
+      createdAt: string;
+    }>();
+    const deleted: string[] = [];
+    render(
+      <App
+        services={createServices({
+          saveMedia: () => save.promise,
+          deleteMedia: (assetId) => {
+            deleted.push(assetId);
+            return Promise.resolve();
+          }
+        })}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '手动填写' }));
+    fireEvent.change(screen.getByLabelText('上传商品图片'), {
+      target: { files: [new File(['image'], 'late.png', { type: 'image/png' })] }
+    });
+    fireEvent.change(screen.getByLabelText('商品链接'), { target: { value: parsedProduct.canonicalUrl } });
+    fireEvent.click(screen.getByRole('button', { name: '解析商品' }));
+    expect(await screen.findByDisplayValue('测试商品')).toBeVisible();
+
+    save.resolve({
+      assetId: 'asset-old-draft',
+      kind: 'image',
+      fileName: 'late.png',
+      mimeType: 'image/png',
+      byteLength: 5,
+      createdAt: '2026-08-31T13:00:00.000Z'
+    });
+
+    await waitFor(() => expect(deleted).toContain('asset-old-draft'));
+    expect(screen.queryByText('late.png')).toBeNull();
+  });
+
+  it('持久化含新媒体的当前草稿后以当前引用执行清理', async () => {
+    const cleanupReferences: string[][] = [];
+    render(
+      <App
+        services={createServices({
+          cleanupMedia: (assetIds) => {
+            cleanupReferences.push([...assetIds]);
+            return Promise.resolve();
+          }
+        })}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '手动填写' }));
+    fireEvent.change(screen.getByLabelText('上传商品图片'), {
+      target: { files: [new File(['image'], 'persisted.png', { type: 'image/png' })] }
+    });
+
+    await waitFor(() =>
+      expect(cleanupReferences.some((assetIds) => assetIds.includes('asset-persisted.png'))).toBe(true)
+    );
+  });
+
+  it('两次视频替换乱序完成时只保留最后选择的视频', async () => {
+    const first = createDeferred<{
+      assetId: string;
+      kind: 'video';
+      fileName: string;
+      mimeType: string;
+      byteLength: number;
+      createdAt: string;
+    }>();
+    const second = createDeferred<{
+      assetId: string;
+      kind: 'video';
+      fileName: string;
+      mimeType: string;
+      byteLength: number;
+      createdAt: string;
+    }>();
+    const saves = [first, second];
+    const deleted: string[] = [];
+    render(
+      <App
+        services={createServices({
+          saveMedia: () => {
+            const next = saves.shift();
+            if (next === undefined) {
+              throw new Error('意外的第三次保存');
+            }
+            return next.promise;
+          },
+          deleteMedia: (assetId) => {
+            deleted.push(assetId);
+            return Promise.resolve();
+          }
+        })}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '手动填写' }));
+    const input = screen.getByLabelText('上传商品视频');
+    fireEvent.change(input, { target: { files: [new File(['one'], 'first.mp4', { type: 'video/mp4' })] } });
+    fireEvent.change(input, { target: { files: [new File(['two'], 'second.mp4', { type: 'video/mp4' })] } });
+    second.resolve({
+      assetId: 'asset-second',
+      kind: 'video',
+      fileName: 'second.mp4',
+      mimeType: 'video/mp4',
+      byteLength: 3,
+      createdAt: '2026-08-31T13:00:00.000Z'
+    });
+    expect(await screen.findByText(/second.mp4/)).toBeVisible();
+    first.resolve({
+      assetId: 'asset-first',
+      kind: 'video',
+      fileName: 'first.mp4',
+      mimeType: 'video/mp4',
+      byteLength: 3,
+      createdAt: '2026-08-31T13:00:00.000Z'
+    });
+
+    await waitFor(() => expect(deleted).toContain('asset-first'));
+    expect(screen.queryByText(/first.mp4/)).toBeNull();
+    expect(screen.getByText(/second.mp4/)).toBeVisible();
   });
 });

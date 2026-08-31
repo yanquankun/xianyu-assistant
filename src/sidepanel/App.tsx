@@ -77,6 +77,14 @@ export function App({ services }: { services: SidePanelServices }) {
   const [logs, setLogs] = useState<OperationLogEntry[]>([]);
   const [panelSide, setPanelSide] = useState<PanelSide>('unknown');
   const draftSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const latestDraftRef = useRef<ProductDraft | null>(null);
+  const imageUploadRequestRef = useRef(0);
+  const videoUploadRequestRef = useRef(0);
+  const pendingMediaAssetIdsRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    latestDraftRef.current = state.draft;
+  }, [state.draft]);
 
   useEffect(() => {
     let active = true;
@@ -119,7 +127,15 @@ export function App({ services }: { services: SidePanelServices }) {
     const draft = state.draft;
     draftSaveQueue.current = draftSaveQueue.current
       .catch(() => undefined)
-      .then(() => services.saveDraft(draft));
+      .then(async () => {
+        await services.saveDraft(draft);
+        const currentDraft = latestDraftRef.current;
+        const currentAssetIds = currentDraft === null ? [] : getLocalAssetIds(currentDraft);
+        await services.cleanupMedia([...currentAssetIds, ...pendingMediaAssetIdsRef.current]);
+        for (const assetId of getLocalAssetIds(draft)) {
+          pendingMediaAssetIdsRef.current.delete(assetId);
+        }
+      });
     void draftSaveQueue.current.catch((error: unknown) => {
       dispatch({ type: 'OPERATION_FAILED', message: `草稿保存失败：${errorMessage(error)}` });
     });
@@ -144,6 +160,8 @@ export function App({ services }: { services: SidePanelServices }) {
   }, [services, state.activeView]);
 
   const parseProduct = async () => {
+    imageUploadRequestRef.current += 1;
+    videoUploadRequestRef.current += 1;
     const id = operationId();
     dispatch({ type: 'PARSE_STARTED', operationId: id, url: state.sourceUrl });
     try {
@@ -223,34 +241,42 @@ export function App({ services }: { services: SidePanelServices }) {
     if (state.draft === null || files.length === 0) {
       return;
     }
+    const draftId = state.draft.id;
+    const requestToken = imageUploadRequestRef.current + 1;
+    imageUploadRequestRef.current = requestToken;
     const selectedCount = state.draft.images.filter((image) => image.selected).length;
     const validation = validateImageBatch(files, MAX_SELECTED_IMAGES - selectedCount);
-    const selectedLocalByteLength = state.draft.images.reduce(
-      (total, image) =>
-        image.selected && image.location.kind === 'local'
-          ? total + image.location.byteLength
-          : total,
-      0
-    );
-    let totalByteLength = selectedLocalByteLength;
-    const accepted: File[] = [];
     const rejected = [...validation.rejected];
+    const savedImages: ProductDraft['images'] = [];
     for (const file of validation.accepted) {
-      if (totalByteLength + file.size > MAX_TOTAL_IMAGE_BYTES) {
-        rejected.push({ fileName: file.name, reason: '图片总大小不能超过 20 MB' });
+      if (!isImageUploadCurrent(draftId, requestToken, latestDraftRef, imageUploadRequestRef)) {
+        break;
+      }
+      const currentDraft = latestDraftRef.current;
+      if (currentDraft === null || !hasImageCapacity(currentDraft, savedImages, file.size)) {
+        rejected.push({ fileName: file.name, reason: imageCapacityReason(currentDraft, savedImages, file.size) });
         continue;
       }
-      accepted.push(file);
-      totalByteLength += file.size;
-    }
-
-    const savedImages: ProductDraft['images'] = [];
-    for (const file of accepted) {
       try {
         const stored = await services.saveMedia(file, 'image');
-        if (!isImageMimeType(stored.mimeType)) {
-          await services.deleteMedia(stored.assetId);
-          rejected.push({ fileName: file.name, reason: '仅支持 JPEG、PNG、WebP 图片' });
+        pendingMediaAssetIdsRef.current.add(stored.assetId);
+        const latestDraft = latestDraftRef.current;
+        if (
+          !isImageUploadCurrent(draftId, requestToken, latestDraftRef, imageUploadRequestRef) ||
+          latestDraft === null ||
+          !hasImageCapacity(latestDraft, savedImages, stored.byteLength) ||
+          !isImageMimeType(stored.mimeType)
+        ) {
+          await discardMedia(services, stored.assetId, pendingMediaAssetIdsRef.current);
+          if (latestDraft !== null && !hasImageCapacity(latestDraft, savedImages, stored.byteLength)) {
+            rejected.push({
+              fileName: file.name,
+              reason: imageCapacityReason(latestDraft, savedImages, stored.byteLength)
+            });
+          }
+          if (!isImageMimeType(stored.mimeType)) {
+            rejected.push({ fileName: file.name, reason: '仅支持 JPEG、PNG、WebP 图片' });
+          }
           continue;
         }
         savedImages.push({
@@ -270,9 +296,13 @@ export function App({ services }: { services: SidePanelServices }) {
       }
     }
 
+    if (!isImageUploadCurrent(draftId, requestToken, latestDraftRef, imageUploadRequestRef)) {
+      return;
+    }
     const notice = rejected.length === 0 ? undefined : formatRejectedFiles(rejected);
     dispatch({
       type: 'LOCAL_IMAGES_ADDED',
+      draftId,
       images: savedImages,
       now: new Date().toISOString(),
       ...(notice === undefined ? {} : { notice })
@@ -283,20 +313,30 @@ export function App({ services }: { services: SidePanelServices }) {
     if (state.draft === null) {
       return;
     }
+    const draftId = state.draft.id;
+    const requestToken = videoUploadRequestRef.current + 1;
+    videoUploadRequestRef.current = requestToken;
     const validation = validateVideo(file);
     if (!validation.ok) {
       dispatch({ type: 'OPERATION_FAILED', message: validation.reason });
       return;
     }
     try {
-      const stored = await services.saveMedia(file, 'video');
+      const normalizedFile = createValidatedVideoFile(file, validation.mimeType);
+      const previousVideo = state.draft.video;
+      const stored = await services.saveMedia(normalizedFile, 'video');
+      pendingMediaAssetIdsRef.current.add(stored.assetId);
+      if (!isVideoUploadCurrent(draftId, requestToken, latestDraftRef, videoUploadRequestRef)) {
+        await discardMedia(services, stored.assetId, pendingMediaAssetIdsRef.current);
+        return;
+      }
       if (!isVideoMimeType(stored.mimeType)) {
-        await services.deleteMedia(stored.assetId);
+        await discardMedia(services, stored.assetId, pendingMediaAssetIdsRef.current);
         throw new Error('仅支持 MP4、MOV 视频');
       }
-      const previousVideo = state.draft.video;
       dispatch({
         type: 'VIDEO_REPLACED',
+        draftId,
         video: {
           id: `local-${stored.assetId}`,
           assetId: stored.assetId,
@@ -309,6 +349,7 @@ export function App({ services }: { services: SidePanelServices }) {
       if (previousVideo !== undefined) {
         try {
           await services.deleteMedia(previousVideo.assetId);
+          pendingMediaAssetIdsRef.current.delete(previousVideo.assetId);
         } catch {
           // The new video is safely referenced; initialization cleanup will retry the old Blob.
         }
@@ -326,6 +367,7 @@ export function App({ services }: { services: SidePanelServices }) {
     try {
       if (image.location.kind === 'local') {
         await services.deleteMedia(image.location.assetId);
+        pendingMediaAssetIdsRef.current.delete(image.location.assetId);
       }
       dispatch({ type: 'IMAGE_REMOVED', id, now: new Date().toISOString() });
     } catch (error) {
@@ -340,6 +382,7 @@ export function App({ services }: { services: SidePanelServices }) {
     }
     try {
       await services.deleteMedia(video.assetId);
+      pendingMediaAssetIdsRef.current.delete(video.assetId);
       dispatch({ type: 'VIDEO_REMOVED', now: new Date().toISOString() });
     } catch (error) {
       dispatch({ type: 'OPERATION_FAILED', message: `视频删除失败：${errorMessage(error)}` });
@@ -528,4 +571,81 @@ function formatRejectedFiles(
   rejected: readonly { fileName: string; reason: string }[]
 ): string {
   return rejected.map(({ fileName, reason }) => `${fileName}：${reason}`).join('；');
+}
+
+function selectedLocalByteLength(draft: ProductDraft): number {
+  return draft.images.reduce(
+    (total, image) =>
+      image.selected && image.location.kind === 'local' ? total + image.location.byteLength : total,
+    0
+  );
+}
+
+function hasImageCapacity(
+  draft: ProductDraft,
+  pendingImages: readonly ProductDraft['images'][number][],
+  nextByteLength: number
+): boolean {
+  const selectedCount = draft.images.filter((image) => image.selected).length + pendingImages.length;
+  const pendingByteLength = pendingImages.reduce(
+    (total, image) => total + (image.location.kind === 'local' ? image.location.byteLength : 0),
+    0
+  );
+  return (
+    selectedCount < MAX_SELECTED_IMAGES &&
+    selectedLocalByteLength(draft) + pendingByteLength + nextByteLength <= MAX_TOTAL_IMAGE_BYTES
+  );
+}
+
+function imageCapacityReason(
+  draft: ProductDraft | null,
+  pendingImages: readonly ProductDraft['images'][number][],
+  nextByteLength: number
+): string {
+  if (draft === null || draft.images.filter((image) => image.selected).length + pendingImages.length >= MAX_SELECTED_IMAGES) {
+    return `最多只能选择 ${String(MAX_SELECTED_IMAGES)} 张图片`;
+  }
+  return selectedLocalByteLength(draft) + pendingImages.reduce(
+    (total, image) => total + (image.location.kind === 'local' ? image.location.byteLength : 0),
+    0
+  ) + nextByteLength > MAX_TOTAL_IMAGE_BYTES
+    ? '图片总大小不能超过 20 MB'
+    : '本地媒体保存失败';
+}
+
+function isImageUploadCurrent(
+  draftId: string,
+  requestToken: number,
+  latestDraftRef: { current: ProductDraft | null },
+  requestRef: { current: number }
+): boolean {
+  return latestDraftRef.current?.id === draftId && requestRef.current === requestToken;
+}
+
+function isVideoUploadCurrent(
+  draftId: string,
+  requestToken: number,
+  latestDraftRef: { current: ProductDraft | null },
+  requestRef: { current: number }
+): boolean {
+  return latestDraftRef.current?.id === draftId && requestRef.current === requestToken;
+}
+
+function createValidatedVideoFile(file: File, mimeType: 'video/mp4' | 'video/quicktime'): File {
+  return file.type === mimeType
+    ? file
+    : new File([file], file.name, { type: mimeType, lastModified: file.lastModified });
+}
+
+async function discardMedia(
+  services: SidePanelServices,
+  assetId: string,
+  pendingAssetIds: Set<string>
+): Promise<void> {
+  pendingAssetIds.delete(assetId);
+  try {
+    await services.deleteMedia(assetId);
+  } catch {
+    // Initialization cleanup retries deletion of an asset that was never accepted into the draft.
+  }
 }

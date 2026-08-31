@@ -1,6 +1,11 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-import { getRemoteImageUrl, type ImageLoadStatus, type ProductImage, type ProductVideo } from '../../domain/product';
+import {
+  getRemoteImageUrl,
+  type ImageLoadStatus,
+  type ProductImage,
+  type ProductVideo
+} from '../../domain/product';
 import { MAX_SELECTED_IMAGES } from '../../media/validation';
 import type { StoredMediaAsset } from '../../storage/media-store';
 import { MediaPreviewDialog } from './MediaPreviewDialog';
@@ -23,7 +28,8 @@ interface PreviewMedia {
   kind: 'image' | 'video';
   label: string;
   remoteUrl?: string;
-  blob?: Blob;
+  objectUrl?: string;
+  trigger: HTMLElement;
 }
 
 export function MediaPicker({
@@ -40,27 +46,87 @@ export function MediaPicker({
 }: MediaPickerProps) {
   const imageInput = useRef<HTMLInputElement>(null);
   const videoInput = useRef<HTMLInputElement>(null);
+  const previewRef = useRef<PreviewMedia | null>(null);
+  const previewRequestRef = useRef(0);
+  const mountedRef = useRef(true);
+  const mediaRef = useRef({ images, video });
   const [preview, setPreview] = useState<PreviewMedia | null>(null);
   const [loadingPreview, setLoadingPreview] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  useEffect(() => {
+    mediaRef.current = { images, video };
+  }, [images, video]);
+
+  const disposePreview = () => {
+    const current = previewRef.current;
+    if (current?.objectUrl !== undefined) {
+      URL.revokeObjectURL(current.objectUrl);
+    }
+    previewRef.current = null;
+  };
+
+  const invalidatePreview = () => {
+    previewRequestRef.current += 1;
+    disposePreview();
+    setPreview(null);
+    setLoadingPreview(null);
+  };
+
+  const replacePreview = (next: PreviewMedia) => {
+    disposePreview();
+    previewRef.current = next;
+    setPreview(next);
+  };
+
+  useEffect(
+    () => {
+      mountedRef.current = true;
+      return () => {
+        mountedRef.current = false;
+        previewRequestRef.current += 1;
+        disposePreview();
+      };
+    },
+    []
+  );
 
   const openLocalPreview = async (
     assetId: string,
     kind: 'image' | 'video',
     label: string,
+    trigger: HTMLElement,
     imageId?: string
   ) => {
+    const requestToken = previewRequestRef.current + 1;
+    previewRequestRef.current = requestToken;
+    disposePreview();
+    setPreview(null);
+    setPreviewError(null);
     setLoadingPreview(assetId);
     try {
       const asset = await resolveLocalAsset(assetId);
-      if (asset === null) {
-        if (imageId !== undefined) {
-          onLoadStatus(imageId, 'failed');
-        }
+      if (!isPreviewRequestCurrent(requestToken, assetId, kind, mountedRef, previewRequestRef, mediaRef)) {
         return;
       }
-      setPreview({ id: assetId, kind, label, blob: asset.blob });
+      if (asset === null) {
+        showPreviewReadFailure(kind, imageId, onLoadStatus, setPreviewError);
+        return;
+      }
+      const objectUrl = URL.createObjectURL(asset.blob);
+      if (!isPreviewRequestCurrent(requestToken, assetId, kind, mountedRef, previewRequestRef, mediaRef)) {
+        URL.revokeObjectURL(objectUrl);
+        return;
+      }
+      replacePreview({ id: assetId, kind, label, objectUrl, trigger });
+    } catch {
+      if (isPreviewRequestCurrent(requestToken, assetId, kind, mountedRef, previewRequestRef, mediaRef)) {
+        showPreviewReadFailure(kind, imageId, onLoadStatus, setPreviewError);
+      }
     } finally {
-      setLoadingPreview((current) => (current === assetId ? null : current));
+      if (mountedRef.current && previewRequestRef.current === requestToken) {
+        setLoadingPreview(null);
+      }
     }
   };
 
@@ -94,6 +160,7 @@ export function MediaPicker({
         </button>
       </div>
       {selectionLimitReached ? <p className="empty-note">已达 9 张图片上限</p> : null}
+      {previewError === null ? null : <p className="error-message">{previewError}</p>}
       <div className="image-grid" aria-label="商品图片">
         {images.map((image, index) => {
           const imageNumber = index + 1;
@@ -111,13 +178,27 @@ export function MediaPicker({
                 className="image-tile__preview"
                 aria-label={`预览${label}`}
                 disabled={previewLoading}
-                onClick={() => {
+                onClick={(event) => {
                   if (remoteUrl !== null) {
-                    setPreview({ id: image.id, kind: 'image', label, remoteUrl });
+                    previewRequestRef.current += 1;
+                    setPreviewError(null);
+                    replacePreview({
+                      id: image.id,
+                      kind: 'image',
+                      label,
+                      remoteUrl,
+                      trigger: event.currentTarget
+                    });
                     return;
                   }
                   if (localLocation !== null) {
-                    void openLocalPreview(localLocation.assetId, 'image', label, image.id);
+                    void openLocalPreview(
+                      localLocation.assetId,
+                      'image',
+                      label,
+                      event.currentTarget,
+                      image.id
+                    );
                   }
                 }}
               >
@@ -151,7 +232,7 @@ export function MediaPicker({
                   type="button"
                   className="button button--quiet"
                   onClick={() => {
-                    setPreview(null);
+                    invalidatePreview();
                     onRemoveImage(image.id);
                   }}
                 >
@@ -165,7 +246,11 @@ export function MediaPicker({
       <div className="video-card">
         <div>
           <strong>商品视频</strong>
-          <p>{video === undefined ? '可选 MP4 或 MOV，最多 100 MB' : `${video.fileName}（${formatByteLength(video.byteLength)}）`}</p>
+          <p>
+            {video === undefined
+              ? '可选 MP4 或 MOV，最多 100 MB'
+              : `${video.fileName}（${formatByteLength(video.byteLength)}）`}
+          </p>
         </div>
         <div className="media-tile-actions">
           <input
@@ -175,8 +260,8 @@ export function MediaPicker({
             type="file"
             accept="video/mp4,video/quicktime,.mp4,.mov"
             onChange={(event) => {
-              const file = event.currentTarget.files?.item(0);
-              if (file !== null && file !== undefined) {
+              const file = Array.from(event.currentTarget.files ?? [])[0];
+              if (file !== undefined) {
                 onUploadVideo(file);
               }
               event.currentTarget.value = '';
@@ -190,7 +275,9 @@ export function MediaPicker({
               <button
                 type="button"
                 className="button button--quiet"
-                onClick={() => void openLocalPreview(video.assetId, 'video', video.fileName)}
+                onClick={(event) =>
+                  void openLocalPreview(video.assetId, 'video', video.fileName, event.currentTarget)
+                }
               >
                 预览商品视频
               </button>
@@ -198,7 +285,7 @@ export function MediaPicker({
                 type="button"
                 className="button button--quiet"
                 onClick={() => {
-                  setPreview(null);
+                  invalidatePreview();
                   onRemoveVideo();
                 }}
               >
@@ -208,9 +295,41 @@ export function MediaPicker({
           )}
         </div>
       </div>
-      <MediaPreviewDialog media={preview} onClose={() => setPreview(null)} />
+      <MediaPreviewDialog media={preview} onClose={invalidatePreview} />
     </>
   );
+}
+
+function isPreviewRequestCurrent(
+  requestToken: number,
+  assetId: string,
+  kind: 'image' | 'video',
+  mountedRef: { current: boolean },
+  requestRef: { current: number },
+  mediaRef: { current: { images: readonly ProductImage[]; video: ProductVideo | undefined } }
+): boolean {
+  if (!mountedRef.current || requestRef.current !== requestToken) {
+    return false;
+  }
+  return kind === 'video'
+    ? mediaRef.current.video?.assetId === assetId
+    : mediaRef.current.images.some(
+        (image) => image.location.kind === 'local' && image.location.assetId === assetId
+      );
+}
+
+function showPreviewReadFailure(
+  kind: 'image' | 'video',
+  imageId: string | undefined,
+  onLoadStatus: (id: string, status: ImageLoadStatus) => void,
+  setPreviewError: (message: string) => void
+): void {
+  if (kind === 'image' && imageId !== undefined) {
+    onLoadStatus(imageId, 'failed');
+    setPreviewError('无法读取本地图片，请重试');
+    return;
+  }
+  setPreviewError('无法读取本地视频，请重试');
 }
 
 function formatByteLength(byteLength: number): string {

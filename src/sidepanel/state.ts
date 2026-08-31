@@ -28,9 +28,15 @@ export type WorkflowAction =
   | { type: 'DRAFT_CHANGED'; draft: ProductDraft }
   | { type: 'IMAGE_SELECTION_TOGGLED'; id: string }
   | { type: 'IMAGE_LOAD_STATUS_CHANGED'; id: string; loadStatus: ProductDraft['images'][number]['loadStatus'] }
-  | { type: 'LOCAL_IMAGES_ADDED'; images: readonly ProductImage[]; now: string; notice?: string }
+  | {
+      type: 'LOCAL_IMAGES_ADDED';
+      draftId?: string;
+      images: readonly ProductImage[];
+      now: string;
+      notice?: string;
+    }
   | { type: 'IMAGE_REMOVED'; id: string; now: string }
-  | { type: 'VIDEO_REPLACED'; video: ProductVideo; now: string }
+  | { type: 'VIDEO_REPLACED'; draftId?: string; video: ProductVideo; now: string }
   | { type: 'VIDEO_REMOVED'; now: string }
   | { type: 'EXPANSION_STARTED' }
   | { type: 'EXPANSION_RECEIVED'; preview: ExpansionPreview }
@@ -201,7 +207,7 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
         }
       };
     case 'LOCAL_IMAGES_ADDED':
-      if (state.draft === null) {
+      if (state.draft === null || (action.draftId !== undefined && state.draft.id !== action.draftId)) {
         return state;
       }
       {
@@ -243,7 +249,7 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
         errorMessage: null
       };
     case 'VIDEO_REPLACED':
-      if (state.draft === null) {
+      if (state.draft === null || (action.draftId !== undefined && state.draft.id !== action.draftId)) {
         return state;
       }
       return {
