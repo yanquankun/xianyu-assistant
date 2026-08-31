@@ -1,9 +1,7 @@
 import type { ProductDraft } from '../domain/product';
 import type { AiSettings } from '../domain/settings';
-import {
-  appendOperationLog,
-  type OperationLogEntry
-} from './operation-log';
+import { isAiSettings, isProductDraft } from '../domain/messages';
+import { appendOperationLog, type OperationLogEntry } from './operation-log';
 
 const SETTINGS_KEY = 'aiSettings';
 const DRAFT_KEY = 'productDraft';
@@ -41,16 +39,18 @@ export function createLocalStore(storageArea: StorageAreaLike): LocalStore {
       await storageArea.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' });
     },
 
-    getSettings(): Promise<AiSettings | null> {
-      return readValue<AiSettings>(storageArea, SETTINGS_KEY);
+    async getSettings(): Promise<AiSettings | null> {
+      const value = await readValue<unknown>(storageArea, SETTINGS_KEY);
+      return isAiSettings(value) ? value : null;
     },
 
     async saveSettings(settings: AiSettings): Promise<void> {
       await storageArea.set({ [SETTINGS_KEY]: cloneValue(settings) });
     },
 
-    getDraft(): Promise<ProductDraft | null> {
-      return readValue<ProductDraft>(storageArea, DRAFT_KEY);
+    async getDraft(): Promise<ProductDraft | null> {
+      const value = await readValue<unknown>(storageArea, DRAFT_KEY);
+      return isProductDraft(value) ? value : null;
     },
 
     async saveDraft(draft: ProductDraft): Promise<void> {

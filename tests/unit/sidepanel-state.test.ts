@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ParsedProduct, ProductDraft } from '../../src/domain/product';
-import { initialWorkflowState, reduceWorkflow } from '../../src/sidepanel/state';
+import { createManualDraft, initialWorkflowState, reduceWorkflow } from '../../src/sidepanel/state';
 
 const parsedProduct: ParsedProduct = {
   platform: 'jd',
@@ -38,6 +38,22 @@ const draft: ProductDraft = {
 };
 
 describe('reduceWorkflow', () => {
+  it('可以直接创建手动草稿用于输入和 AI 扩写', () => {
+    const draft = createManualDraft('manual-1', '2026-08-31T12:00:00.000Z');
+    const state = reduceWorkflow(initialWorkflowState, { type: 'DRAFT_RESTORED', draft });
+
+    expect(state.phase).toBe('editing');
+    expect(state.draft).toMatchObject({
+      id: 'manual-1',
+      platform: 'generic',
+      canonicalUrl: '',
+      title: '',
+      description: '',
+      price: null
+    });
+    expect(state.statusMessage).toBe('已恢复本地草稿');
+  });
+
   it('解析成功后进入可编辑状态', () => {
     const parsing = reduceWorkflow(initialWorkflowState, {
       type: 'PARSE_STARTED',

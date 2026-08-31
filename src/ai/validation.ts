@@ -18,7 +18,12 @@ function readRequiredText(record: Record<string, unknown>, key: 'title' | 'descr
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new Error(key === 'title' ? 'AI 响应缺少有效标题' : 'AI 响应缺少有效描述');
   }
-  return value.trim();
+  const normalized = value.trim();
+  const maximum = key === 'title' ? 60 : 5_000;
+  if (normalized.length > maximum) {
+    throw new Error(key === 'title' ? 'AI 标题超过 60 个字符' : 'AI 描述超过 5000 个字符');
+  }
+  return normalized;
 }
 
 function readWarnings(value: unknown): string[] {

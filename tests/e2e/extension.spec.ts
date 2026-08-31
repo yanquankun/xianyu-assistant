@@ -7,6 +7,7 @@ import { startFixtureServer, type FixtureServer } from './fixtures-server';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '../..');
 const EXTENSION_PATH = resolve(PROJECT_ROOT, '.output/chrome-mv3-e2e');
+const PRODUCTION_EXTENSION_PATH = resolve(PROJECT_ROOT, '.output/chrome-mv3');
 
 async function extensionId(context: BrowserContext): Promise<string> {
   const worker = context.serviceWorkers().at(0) ?? (await context.waitForEvent('serviceworker'));
@@ -24,13 +25,15 @@ test.describe('闲鱼上架助手扩展', () => {
   let context: BrowserContext | undefined;
   let fixtureServer: FixtureServer;
   let taobaoHtml: string;
+  let jdHtml: string;
   let loggedOutHtml: string;
   let publishHtml: string;
 
   test.beforeAll(async () => {
     fixtureServer = await startFixtureServer();
-    [taobaoHtml, loggedOutHtml, publishHtml] = await Promise.all([
+    [taobaoHtml, jdHtml, loggedOutHtml, publishHtml] = await Promise.all([
       readFile(resolve(PROJECT_ROOT, 'tests/fixtures/taobao-product.html'), 'utf8'),
+      readFile(resolve(PROJECT_ROOT, 'tests/fixtures/jd-product.html'), 'utf8'),
       readFile(resolve(PROJECT_ROOT, 'tests/fixtures/xianyu-logged-out.html'), 'utf8'),
       readFile(resolve(PROJECT_ROOT, 'tests/fixtures/xianyu-publish.html'), 'utf8')
     ]);
@@ -49,6 +52,10 @@ test.describe('闲鱼上架助手扩展', () => {
     });
     await context.route('https://item.taobao.com/**', async (route) => {
       const html = taobaoHtml.replaceAll('https://img.example.com', fixtureServer.baseUrl);
+      await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html });
+    });
+    await context.route('https://item.jd.com/**', async (route) => {
+      const html = jdHtml.replaceAll('//img.example.com', fixtureServer.baseUrl);
       await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html });
     });
     await context.route('https://www.goofish.com/**', async (route) => {
@@ -129,5 +136,76 @@ test.describe('闲鱼上架助手扩展', () => {
       })
     ).toBe(0);
     expect(fixtureServer.requests.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test('京东夹具可进入可编辑草稿', async ({ browserName }) => {
+    expect(browserName).toBe('chromium');
+    if (context === undefined) {
+      throw new Error('隔离浏览器上下文未创建');
+    }
+    const sourceUrl = 'https://item.jd.com/1.html';
+    const sourcePage = await context.newPage();
+    await sourcePage.goto(sourceUrl);
+    const panel = await openSidePanelPage(context);
+
+    await panel.getByLabel('商品链接').fill(sourceUrl);
+    await panel.getByRole('button', { name: '解析商品' }).click();
+
+    await expect(panel.getByLabel('商品标题')).toHaveValue('京东结构化商品');
+    await expect(panel.getByLabel('售价')).toHaveValue('1299');
+    await expect(panel.getByText('京东来源')).toBeVisible();
+    await expect(panel.getByRole('img', { name: '商品图片 1' })).toBeVisible();
+  });
+
+  test('手动草稿关闭侧边栏后仍可恢复并继续 AI 扩写', async ({ browserName }) => {
+    expect(browserName).toBe('chromium');
+    if (context === undefined) {
+      throw new Error('隔离浏览器上下文未创建');
+    }
+    let panel = await openSidePanelPage(context);
+    await panel.getByRole('button', { name: '手动填写' }).click();
+    await panel.getByLabel('商品标题').fill('本地保存的手动标题');
+    await panel.getByLabel('商品描述').fill('本地保存的手动描述');
+    await expect
+      .poll(() =>
+        panel.evaluate(async () => {
+          const values = await browser.storage.local.get('productDraft');
+          const draft: unknown = values.productDraft;
+          return typeof draft === 'object' &&
+            draft !== null &&
+            'title' in draft &&
+            typeof draft.title === 'string'
+            ? draft.title
+            : undefined;
+        })
+      )
+      .toBe('本地保存的手动标题');
+
+    await panel.close();
+    panel = await openSidePanelPage(context);
+
+    await expect(panel.getByLabel('商品标题')).toHaveValue('本地保存的手动标题');
+    await expect(panel.getByText('已恢复本地草稿')).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'AI 扩写' })).toBeEnabled();
+  });
+
+  test('生产构建可在独立 Chromium 中加载侧边栏入口', async ({ browserName }) => {
+    expect(browserName).toBe('chromium');
+    const productionContext = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      viewport: { width: 440, height: 900 },
+      args: [
+        `--disable-extensions-except=${PRODUCTION_EXTENSION_PATH}`,
+        `--load-extension=${PRODUCTION_EXTENSION_PATH}`
+      ]
+    });
+    try {
+      const panel = await openSidePanelPage(productionContext);
+      await expect(panel.getByText('闲鱼上架助手')).toBeVisible();
+      await expect(panel.getByText('最终发布需在闲鱼页面手动完成')).toBeVisible();
+    } finally {
+      await productionContext.close();
+    }
   });
 });

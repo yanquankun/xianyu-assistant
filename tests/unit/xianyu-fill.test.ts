@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ProductImage } from '../../src/domain/product';
 import {
   downloadSelectedImages,
   fillXianyuDraft,
+  isXianyuFillPayload,
   type XianyuFillPayload
 } from '../../src/xianyu/fill';
 
@@ -35,6 +36,17 @@ const validPayload: XianyuFillPayload = {
 };
 
 describe('fillXianyuDraft', () => {
+  it('严格校验跨上下文填表消息边界', () => {
+    expect(isXianyuFillPayload(validPayload)).toBe(true);
+    expect(isXianyuFillPayload({ ...validPayload, price: Number.NaN })).toBe(false);
+    expect(
+      isXianyuFillPayload({
+        ...validPayload,
+        images: new Array(10).fill(validPayload.images[0])
+      })
+    ).toBe(false);
+  });
+
   it('填写标题、价格、描述和图片后不触发发布按钮', async () => {
     const document = publishDocument();
     const publish = document.querySelector<HTMLButtonElement>('[data-testid="publish"]');
@@ -48,7 +60,9 @@ describe('fillXianyuDraft', () => {
 
     const result = await fillXianyuDraft(document, validPayload);
 
-    expect(result.filled).toEqual(expect.arrayContaining(['title', 'price', 'description', 'images']));
+    expect(result.filled).toEqual(
+      expect.arrayContaining(['title', 'price', 'description', 'images'])
+    );
     expect(document.querySelector<HTMLInputElement>('input[name="title"]')?.value).toBe(
       '测试发布标题'
     );
@@ -115,7 +129,9 @@ describe('downloadSelectedImages', () => {
   it('只下载已选择的有效图片并转换为可传输内容', async () => {
     const requested: string[] = [];
     const result = await downloadSelectedImages((input) => {
-      requested.push(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+      requested.push(
+        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      );
       return Promise.resolve(
         new Response(new Uint8Array([1, 2, 3]), {
           status: 200,
@@ -134,6 +150,26 @@ describe('downloadSelectedImages', () => {
       }
     ]);
     expect(result.failures).toEqual([]);
+  });
+
+  it('已选择但尚未加载成功的图片不会进入下载队列', async () => {
+    const idleImage: ProductImage = {
+      ...selectedImage,
+      id: 'idle',
+      loadStatus: 'idle'
+    };
+    let requested = false;
+
+    const result = await downloadSelectedImages(() => {
+      requested = true;
+      return Promise.resolve(new Response());
+    }, [idleImage]);
+
+    expect(requested).toBe(false);
+    expect(result.files).toEqual([]);
+    expect(result.failures).toEqual([
+      expect.objectContaining({ id: 'idle', message: '图片尚未成功加载' })
+    ]);
   });
 
   it.each([
@@ -162,5 +198,66 @@ describe('downloadSelectedImages', () => {
 
     expect(result.files).toEqual([]);
     expect(result.failures[0]?.message).toContain('图片超过 10 MB 上限');
+  });
+
+  it('图片下载超时后返回失败，不会永久阻塞填表', async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = downloadSelectedImages(
+        () => new Promise<Response>(() => undefined),
+        [selectedImage]
+      );
+      const resultExpectation = expect(operation).resolves.toMatchObject({
+        files: [],
+        failures: [{ message: '图片下载超时，请稍后重试' }]
+      });
+
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      await resultExpectation;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('最多传输 9 张已选择图片', async () => {
+    const selected = Array.from({ length: 10 }, (_, index) => ({
+      ...selectedImage,
+      id: `image-${String(index + 1)}`,
+      url: `https://img.example.com/${String(index + 1)}.png`
+    }));
+    let requests = 0;
+
+    const result = await downloadSelectedImages(() => {
+      requests += 1;
+      return Promise.resolve(
+        new Response(new Uint8Array([1]), { headers: { 'content-type': 'image/png' } })
+      );
+    }, selected);
+
+    expect(requests).toBe(9);
+    expect(result.files).toHaveLength(9);
+    expect(result.failures[0]?.message).toContain('最多处理 9 张图片');
+  });
+
+  it('图片原始数据总量不超过 20 MB', async () => {
+    const selected = Array.from({ length: 3 }, (_, index) => ({
+      ...selectedImage,
+      id: `large-${String(index + 1)}`,
+      url: `https://img.example.com/large-${String(index + 1)}.png`
+    }));
+
+    const result = await downloadSelectedImages(
+      () =>
+        Promise.resolve(
+          new Response(new Uint8Array(8 * 1024 * 1024), {
+            headers: { 'content-type': 'image/png' }
+          })
+        ),
+      selected
+    );
+
+    expect(result.files).toHaveLength(2);
+    expect(result.failures[0]?.message).toContain('图片总量超过 20 MB 上限');
   });
 });

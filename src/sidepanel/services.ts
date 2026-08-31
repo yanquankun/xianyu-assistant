@@ -1,12 +1,12 @@
-import type { AiConnectionResult } from '../ai/client';
+import { normalizeChatCompletionsUrl, type AiConnectionResult } from '../ai/client';
 import type { ExpansionPreview } from '../ai/validation';
 import { getRequestedOrigin, normalizeHttpUrl } from '../background/permissions';
 import type { OperationResult } from '../domain/errors';
 import type { RuntimeMessage } from '../domain/messages';
 import type { ParsedProduct, ProductDraft } from '../domain/product';
 import type { AiSettings } from '../domain/settings';
-import { createLocalStore, type StorageAreaLike } from '../storage/local-store';
-import type { OperationLogEntry } from '../storage/operation-log';
+import { createLocalStore, type LocalStore, type StorageAreaLike } from '../storage/local-store';
+import type { OperationLogEntry, OperationStage } from '../storage/operation-log';
 import type { FillResult } from '../xianyu/fill';
 import type { XianyuLoginState } from '../xianyu/login';
 import type { PanelSide, SidePanelServices } from './App';
@@ -51,6 +51,27 @@ async function requestOrigins(origins: readonly string[]): Promise<void> {
   }
 }
 
+async function requestOriginsWithLog(
+  store: LocalStore,
+  origins: readonly string[],
+  stage: OperationStage
+): Promise<void> {
+  try {
+    await requestOrigins(origins);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '站点访问权限未授权';
+    await store.appendLog({
+      id: operationId(),
+      timestamp: new Date().toISOString(),
+      stage,
+      outcome: 'failure',
+      message,
+      code: 'PERMISSION_DENIED'
+    });
+    throw error;
+  }
+}
+
 function operationId(): string {
   return typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -59,7 +80,9 @@ function operationId(): string {
 
 function sourceOrigins(draft: ProductDraft): string[] {
   const origins: string[] = [];
-  for (const image of draft.images.filter((candidate) => candidate.selected)) {
+  for (const image of draft.images
+    .filter((candidate) => candidate.selected && candidate.loadStatus === 'loaded')
+    .slice(0, 9)) {
     const normalized = normalizeHttpUrl(image.url);
     origins.push(getRequestedOrigin(normalized.url));
   }
@@ -77,9 +100,17 @@ export function createBrowserSidePanelServices(): SidePanelServices {
       return store.saveSettings(settings);
     },
 
+    loadDraft(): Promise<ProductDraft | null> {
+      return store.getDraft();
+    },
+
+    saveDraft(draft: ProductDraft): Promise<void> {
+      return store.saveDraft(draft);
+    },
+
     async parseProduct(url: string): Promise<ParsedProduct> {
       const normalized = normalizeHttpUrl(url);
-      await requestOrigins([getRequestedOrigin(normalized.url)]);
+      await requestOriginsWithLog(store, [getRequestedOrigin(normalized.url)], 'parse');
       return send<ParsedProduct>({
         type: 'PARSE_PRODUCT',
         operationId: operationId(),
@@ -88,14 +119,14 @@ export function createBrowserSidePanelServices(): SidePanelServices {
     },
 
     async testAiConnection(settings: AiSettings): Promise<AiConnectionResult> {
-      const url = normalizeHttpUrl(settings.baseUrl);
-      await requestOrigins([getRequestedOrigin(url.url)]);
+      const url = normalizeChatCompletionsUrl(settings.baseUrl);
+      await requestOriginsWithLog(store, [getRequestedOrigin(url)], 'ai');
       return send<AiConnectionResult>({ type: 'TEST_AI_CONNECTION', settings });
     },
 
     async expandDraft(settings: AiSettings, draft: ProductDraft): Promise<ExpansionPreview> {
-      const url = normalizeHttpUrl(settings.baseUrl);
-      await requestOrigins([getRequestedOrigin(url.url)]);
+      const url = normalizeChatCompletionsUrl(settings.baseUrl);
+      await requestOriginsWithLog(store, [getRequestedOrigin(url)], 'ai');
       return send<ExpansionPreview>({ type: 'EXPAND_DRAFT', settings, draft });
     },
 
@@ -104,7 +135,7 @@ export function createBrowserSidePanelServices(): SidePanelServices {
     },
 
     async fillDraft(draft: ProductDraft): Promise<FillResult> {
-      await requestOrigins(sourceOrigins(draft));
+      await requestOriginsWithLog(store, sourceOrigins(draft), 'fill');
       return send<FillResult>({ type: 'FILL_XIANYU_DRAFT', draft });
     },
 

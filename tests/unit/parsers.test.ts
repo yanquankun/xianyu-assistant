@@ -83,4 +83,20 @@ describe('parseProductDocument', () => {
     expect(result.warnings).toContain('未能识别商品价格，请手动填写');
     expect(result.confidence).toBe('low');
   });
+
+  it('页面图片过多时只保留消息边界允许的前 20 张', () => {
+    const images = Array.from(
+      { length: 25 },
+      (_, index) => `<meta property="og:image" content="/image-${String(index + 1)}.jpg" />`
+    ).join('');
+    const document = new DOMParser().parseFromString(
+      `<!doctype html><html><head><meta property="og:title" content="多图商品" />${images}</head></html>`,
+      'text/html'
+    );
+
+    const result = parseProductDocument(document, 'https://shop.example.com/product/many-images');
+
+    expect(result.images).toHaveLength(20);
+    expect(result.images.at(-1)?.url).toBe('https://shop.example.com/image-20.jpg');
+  });
 });

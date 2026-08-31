@@ -1,6 +1,6 @@
 import type { RuntimeMessage } from '../src/domain/messages';
 import type { XianyuFillPayload } from '../src/xianyu/fill';
-import { fillXianyuDraft } from '../src/xianyu/fill';
+import { fillXianyuDraft, isXianyuFillPayload } from '../src/xianyu/fill';
 import { detectLoginState } from '../src/xianyu/login';
 
 interface FillMessage {
@@ -18,7 +18,8 @@ function isFillMessage(value: unknown): value is FillMessage {
     value !== null &&
     'type' in value &&
     value.type === 'FILL_XIANYU_FORM' &&
-    'payload' in value
+    'payload' in value &&
+    isXianyuFillPayload(value.payload)
   );
 }
 
@@ -26,7 +27,10 @@ export default defineContentScript({
   matches: ['https://www.goofish.com/*'],
   runAt: 'document_idle',
   main() {
-    browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+    browser.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
+      if (sender.id !== browser.runtime.id) {
+        return undefined;
+      }
       if (isRuntimeMessage(message) && message.type === 'CHECK_XIANYU_LOGIN') {
         sendResponse(detectLoginState(document, window.location.href));
         return true;

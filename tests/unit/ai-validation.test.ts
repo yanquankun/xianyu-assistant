@@ -74,11 +74,20 @@ describe('validateExpansion', () => {
   );
 
   it('缺少标题或描述时拒绝响应', () => {
-    expect(() => validateExpansion({ title: '', description: '描述', warnings: [] }, draft)).toThrow(
-      'AI 响应缺少有效标题'
-    );
-    expect(() => validateExpansion({ title: '标题', description: '', warnings: [] }, draft)).toThrow(
-      'AI 响应缺少有效描述'
-    );
+    expect(() =>
+      validateExpansion({ title: '', description: '描述', warnings: [] }, draft)
+    ).toThrow('AI 响应缺少有效标题');
+    expect(() =>
+      validateExpansion({ title: '标题', description: '', warnings: [] }, draft)
+    ).toThrow('AI 响应缺少有效描述');
+  });
+
+  it('拒绝超过编辑器边界的标题和描述', () => {
+    expect(() =>
+      validateExpansion({ title: '标'.repeat(61), description: '描述', warnings: [] }, draft)
+    ).toThrow('AI 标题超过 60 个字符');
+    expect(() =>
+      validateExpansion({ title: '标题', description: '描'.repeat(5_001), warnings: [] }, draft)
+    ).toThrow('AI 描述超过 5000 个字符');
   });
 });

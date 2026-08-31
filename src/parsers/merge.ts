@@ -9,6 +9,8 @@ const SOURCE_PRIORITY: Record<CandidateSource, number> = {
   dom: 1
 };
 
+const MAX_PRODUCT_IMAGES = 20;
+
 function firstDefined<T>(candidates: readonly ParseCandidate[], read: (candidate: ParseCandidate) => T | undefined): T | undefined {
   for (const candidate of candidates) {
     const value = read(candidate);
@@ -49,6 +51,9 @@ function mergeImages(candidates: readonly ParseCandidate[], pageUrl: string): Pr
         selected: true,
         loadStatus: 'idle'
       });
+      if (images.length === MAX_PRODUCT_IMAGES) {
+        return images;
+      }
     }
   }
   return images;

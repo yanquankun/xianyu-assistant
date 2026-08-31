@@ -2,7 +2,12 @@ import { selectXianyuTab, type BrowserTab } from '../background/tabs';
 
 export const XIANYU_PUBLISH_URL = 'https://www.goofish.com/publish';
 
-export interface TabMutationOptions {
+export interface TabUpdateOptions {
+  url?: string;
+  active: boolean;
+}
+
+export interface TabCreateOptions {
   url: string;
   active: boolean;
 }
@@ -10,8 +15,8 @@ export interface TabMutationOptions {
 export interface XianyuTabDependencies {
   listTabs(): Promise<BrowserTab[]>;
   getActiveTabId(): Promise<number | undefined>;
-  update(tabId: number, options: TabMutationOptions): Promise<BrowserTab>;
-  create(options: TabMutationOptions): Promise<BrowserTab>;
+  update(tabId: number, options: TabUpdateOptions): Promise<BrowserTab>;
+  create(options: TabCreateOptions): Promise<BrowserTab>;
   waitForComplete(tabId: number): Promise<void>;
 }
 
@@ -54,12 +59,13 @@ export async function prepareXianyuPublishTab(
   }
 
   const selectedTab = tabs.find((tab) => tab.id === selection.tabId);
-  const alreadyActivePublishPage =
-    selection.reusedActiveTab && isPublishPage(selectedTab?.url);
-  if (alreadyActivePublishPage) {
+  if (isPublishPage(selectedTab?.url)) {
+    if (!selection.reusedActiveTab) {
+      await dependencies.update(selection.tabId, { active: true });
+    }
     return {
       tabId: selection.tabId,
-      reusedActiveTab: true,
+      reusedActiveTab: selection.reusedActiveTab,
       createdTab: false,
       navigatedToPublish: false
     };

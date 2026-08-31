@@ -56,3 +56,17 @@ export function getRequestedOrigin(url: URL): string {
   }
   return `${url.protocol}//${url.host}/*`;
 }
+
+export function ensureProductDestination(source: NormalizedUrl, destination: string): void {
+  const finalUrl = normalizeHttpUrl(destination);
+  if (source.platform !== 'generic' && finalUrl.platform !== source.platform) {
+    throw new Error('商品页跳转到了不受支持的站点，请先在浏览器中打开商品页');
+  }
+  const hostname = finalUrl.url.hostname.toLowerCase();
+  const pathname = finalUrl.url.pathname.toLowerCase();
+  const verificationHost = /(^|\.)(login|passport|verify|captcha|sec)\./u.test(hostname);
+  const verificationPath = /\/(login|verify|captcha)(\/|\.|$)/u.test(pathname);
+  if (verificationHost || verificationPath) {
+    throw new Error('商品页跳转到了登录或验证页面，请先在浏览器中完成验证');
+  }
+}

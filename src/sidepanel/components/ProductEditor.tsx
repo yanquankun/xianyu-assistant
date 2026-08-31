@@ -37,7 +37,9 @@ export function ProductEditor({ draft, onChange }: ProductEditorProps) {
     <section className="editor-card">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">{PLATFORM_LABELS[draft.platform]}</span>
+          <span className="eyebrow">
+            {draft.canonicalUrl.length === 0 ? '手动输入' : PLATFORM_LABELS[draft.platform]}
+          </span>
           <h2>编辑发布内容</h2>
         </div>
         <span className={`confidence confidence--${draft.confidence}`}>
@@ -118,6 +120,19 @@ export function ProductEditor({ draft, onChange }: ProductEditorProps) {
             update({
               images: draft.images.map((image) =>
                 image.id === id ? { ...image, selected: !image.selected } : image
+              )
+            })
+          }
+          onLoadStatus={(id, loadStatus) =>
+            update({
+              images: draft.images.map((image) =>
+                image.id === id
+                  ? {
+                      ...image,
+                      loadStatus,
+                      selected: loadStatus === 'failed' ? false : image.selected
+                    }
+                  : image
               )
             })
           }

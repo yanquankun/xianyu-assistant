@@ -8,11 +8,14 @@ import {
 } from '../../src/xianyu/tab-orchestrator';
 
 interface CallLog {
-  updates: { tabId: number; url: string; active: boolean }[];
+  updates: { tabId: number; url?: string; active: boolean }[];
   creates: { url: string; active: boolean }[];
 }
 
-function createDependencies(tabs: BrowserTab[], activeTabId: number): {
+function createDependencies(
+  tabs: BrowserTab[],
+  activeTabId: number
+): {
   dependencies: XianyuTabDependencies;
   calls: CallLog;
 } {
@@ -24,7 +27,14 @@ function createDependencies(tabs: BrowserTab[], activeTabId: number): {
       getActiveTabId: () => Promise.resolve(activeTabId),
       update: (tabId, options) => {
         calls.updates.push({ tabId, ...options });
-        return Promise.resolve({ id: tabId, url: options.url, active: options.active, windowId: 1 });
+        const existing = tabs.find((tab) => tab.id === tabId);
+        const resolvedUrl = options.url ?? existing?.url;
+        return Promise.resolve({
+          id: tabId,
+          ...(resolvedUrl === undefined ? {} : { url: resolvedUrl }),
+          active: options.active,
+          windowId: 1
+        });
       },
       create: (options) => {
         calls.creates.push(options);
@@ -65,6 +75,26 @@ describe('prepareXianyuPublishTab', () => {
     expect(result.reusedActiveTab).toBe(true);
     expect(result.navigatedToPublish).toBe(true);
     expect(calls.updates).toEqual([{ tabId: 2, url: XIANYU_PUBLISH_URL, active: true }]);
+  });
+
+  it('非活动闲鱼发布页只激活，不重新导航或清空现有表单', async () => {
+    const { dependencies, calls } = createDependencies(
+      [
+        { id: 1, url: 'https://example.com/', active: true, windowId: 1 },
+        { id: 2, url: XIANYU_PUBLISH_URL, active: false, windowId: 1 }
+      ],
+      1
+    );
+
+    const result = await prepareXianyuPublishTab(dependencies);
+
+    expect(result).toEqual({
+      tabId: 2,
+      reusedActiveTab: false,
+      createdTab: false,
+      navigatedToPublish: false
+    });
+    expect(calls.updates).toEqual([{ tabId: 2, active: true }]);
   });
 
   it('当前页不是闲鱼时激活并导航已有闲鱼页', async () => {

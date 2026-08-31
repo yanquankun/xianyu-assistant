@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ensureProductDestination,
   getRequestedOrigin,
   normalizeHttpUrl
 } from '../../src/background/permissions';
@@ -45,6 +46,22 @@ describe('getRequestedOrigin', () => {
   it('保留非默认端口', () => {
     expect(getRequestedOrigin(new URL('http://localhost:4173/item'))).toBe(
       'http://localhost:4173/*'
+    );
+  });
+});
+
+describe('ensureProductDestination', () => {
+  it('允许同平台商品页，并拒绝登录或跨站重定向', () => {
+    const source = normalizeHttpUrl('https://item.taobao.com/item.htm?id=1');
+
+    expect(() =>
+      ensureProductDestination(source, 'https://detail.tmall.com/item.htm?id=1')
+    ).not.toThrow();
+    expect(() =>
+      ensureProductDestination(source, 'https://login.taobao.com/havanaone/login.htm')
+    ).toThrow('商品页跳转到了登录或验证页面');
+    expect(() => ensureProductDestination(source, 'https://example.com/login')).toThrow(
+      '商品页跳转到了不受支持的站点'
     );
   });
 });

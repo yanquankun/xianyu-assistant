@@ -12,7 +12,7 @@
     "dev": "wxt",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "wxt build --mode e2e && playwright test",
+    "test:e2e": "wxt build && wxt build --mode e2e && playwright test",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",

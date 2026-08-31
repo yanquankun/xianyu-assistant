@@ -11,7 +11,9 @@ class MemoryStorageArea implements StorageAreaLike {
   get(keys: string | string[]): Promise<Record<string, unknown>> {
     const requested = Array.isArray(keys) ? keys : [keys];
     return Promise.resolve(
-      Object.fromEntries(requested.filter((key) => key in this.data).map((key) => [key, this.data[key]]))
+      Object.fromEntries(
+        requested.filter((key) => key in this.data).map((key) => [key, this.data[key]])
+      )
     );
   }
 
@@ -90,6 +92,16 @@ describe('createLocalStore', () => {
 
   it('存储中没有值时返回安全默认值', async () => {
     const store = createLocalStore(new MemoryStorageArea());
+
+    await expect(store.getSettings()).resolves.toBeNull();
+    await expect(store.getDraft()).resolves.toBeNull();
+  });
+
+  it('损坏或旧版本本地数据不会进入应用状态', async () => {
+    const area = new MemoryStorageArea();
+    area.data.aiSettings = { apiKey: 'missing-fields' };
+    area.data.productDraft = { title: 'missing-fields' };
+    const store = createLocalStore(area);
 
     await expect(store.getSettings()).resolves.toBeNull();
     await expect(store.getDraft()).resolves.toBeNull();

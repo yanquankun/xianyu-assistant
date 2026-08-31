@@ -1,11 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ProductDraft } from '../../src/domain/product';
 import type { AiSettings } from '../../src/domain/settings';
-import {
-  createAiClient,
-  normalizeChatCompletionsUrl
-} from '../../src/ai/client';
+import { createAiClient, normalizeChatCompletionsUrl } from '../../src/ai/client';
 
 const settings: AiSettings = {
   baseUrl: 'https://api.example.com/v1/',
@@ -75,18 +72,37 @@ describe('normalizeChatCompletionsUrl', () => {
       'AI Base URL 仅支持 HTTP 或 HTTPS'
     );
   });
+
+  it('远程 AI 地址必须使用 HTTPS，但允许本机夹具使用 HTTP', () => {
+    expect(() => normalizeChatCompletionsUrl('http://api.example.com/v1')).toThrow(
+      '远程 AI Base URL 必须使用 HTTPS'
+    );
+    expect(normalizeChatCompletionsUrl('http://127.0.0.1:4173/v1').href).toBe(
+      'http://127.0.0.1:4173/v1/chat/completions'
+    );
+    expect(normalizeChatCompletionsUrl('http://localhost:4173/v1').href).toBe(
+      'http://localhost:4173/v1/chat/completions'
+    );
+  });
 });
 
 describe('createAiClient', () => {
+  it('连接测试不强制启用 JSON mode', async () => {
+    let requestBody = '';
+    const client = createAiClient((_input, init) => {
+      requestBody = typeof init?.body === 'string' ? init.body : '';
+      return Promise.resolve(chatResponse('连接成功'));
+    });
+
+    await client.testConnection(settings);
+
+    expect(JSON.parse(requestBody)).not.toHaveProperty('response_format');
+  });
+
   it('使用 Bearer Key 和配置模型发送 OpenAI 兼容请求', async () => {
     const requests: { url: string; init: RequestInit }[] = [];
     const client = createAiClient((input, init) => {
-      const url =
-        typeof input === 'string'
-          ? input
-          : input instanceof URL
-            ? input.href
-            : input.url;
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       requests.push({ url, init: init ?? {} });
       return Promise.resolve(
         chatResponse('{"title":"扩写标题","description":"扩写描述","warnings":[]}')
@@ -146,5 +162,31 @@ describe('createAiClient', () => {
         expect(error.message).not.toContain('secret-key');
       }
     }
+  });
+
+  it('AI 请求超过时限后中止并返回可恢复错误', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createAiClient(() => new Promise<Response>(() => undefined));
+      const operation = client.testConnection(settings);
+      const rejection = expect(operation).rejects.toMatchObject({
+        code: 'AI_NETWORK_ERROR',
+        message: 'AI 请求超时，请稍后重试'
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('拒绝超长 AI 响应', async () => {
+    const client = createAiClient(() => Promise.resolve(chatResponse('a'.repeat(20_001))));
+
+    await expect(client.testConnection(settings)).rejects.toMatchObject({
+      code: 'AI_INVALID_RESPONSE'
+    });
   });
 });

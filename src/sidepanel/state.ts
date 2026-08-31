@@ -23,6 +23,7 @@ export type WorkflowAction =
   | { type: 'PARSE_STARTED'; operationId: string; url: string }
   | { type: 'PARSE_SUCCEEDED'; operationId: string; product: ParsedProduct; now: string }
   | { type: 'PARSE_FAILED'; operationId: string; message: string }
+  | { type: 'DRAFT_RESTORED'; draft: ProductDraft }
   | { type: 'DRAFT_CHANGED'; draft: ProductDraft }
   | { type: 'EXPANSION_STARTED' }
   | { type: 'EXPANSION_RECEIVED'; preview: ExpansionPreview }
@@ -71,6 +72,30 @@ function createDraft(product: ParsedProduct, id: string, now: string): ProductDr
   };
 }
 
+export function createManualDraft(id: string, now: string): ProductDraft {
+  return {
+    id,
+    platform: 'generic',
+    canonicalUrl: '',
+    source: {
+      title: '',
+      description: '',
+      price: null,
+      currency: 'CNY'
+    },
+    title: '',
+    description: '',
+    price: null,
+    currency: 'CNY',
+    images: [],
+    warnings: [],
+    confidence: 'low',
+    shippingMethod: '包邮',
+    categoryNote: '',
+    updatedAt: now
+  };
+}
+
 export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): WorkflowState {
   switch (action.type) {
     case 'VIEW_CHANGED':
@@ -108,6 +133,15 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
         statusMessage: '商品解析失败',
         errorMessage: action.message
       };
+    case 'DRAFT_RESTORED':
+      return {
+        ...state,
+        phase: 'editing',
+        draft: action.draft,
+        expansionPreview: null,
+        statusMessage: '已恢复本地草稿',
+        errorMessage: null
+      };
     case 'DRAFT_CHANGED':
       return { ...state, draft: action.draft, phase: 'editing' };
     case 'EXPANSION_STARTED':
@@ -143,6 +177,11 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
     case 'FILL_FINISHED':
       return { ...state, phase: 'editing', statusMessage: action.message, errorMessage: null };
     case 'OPERATION_FAILED':
-      return { ...state, phase: 'error', errorMessage: action.message, statusMessage: '操作未完成' };
+      return {
+        ...state,
+        phase: 'error',
+        errorMessage: action.message,
+        statusMessage: '操作未完成'
+      };
   }
 }

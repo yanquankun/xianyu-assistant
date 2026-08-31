@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 
 import type { AiConnectionResult } from '../ai/client';
 import type { ExpansionPreview as ExpansionPreviewValue } from '../ai/validation';
@@ -12,13 +12,15 @@ import { ExpansionPreview } from './components/ExpansionPreview';
 import { LoginBanner } from './components/LoginBanner';
 import { OperationLog } from './components/OperationLog';
 import { ProductEditor } from './components/ProductEditor';
-import { initialWorkflowState, reduceWorkflow, type PanelView } from './state';
+import { createManualDraft, initialWorkflowState, reduceWorkflow, type PanelView } from './state';
 
 export type PanelSide = 'left' | 'right' | 'unknown';
 
 export interface SidePanelServices {
   loadSettings(): Promise<AiSettings | null>;
   saveSettings(settings: AiSettings): Promise<void>;
+  loadDraft(): Promise<ProductDraft | null>;
+  saveDraft(draft: ProductDraft): Promise<void>;
   parseProduct(url: string): Promise<ParsedProduct>;
   testAiConnection(settings: AiSettings): Promise<AiConnectionResult>;
   expandDraft(settings: AiSettings, draft: ProductDraft): Promise<ExpansionPreviewValue>;
@@ -59,12 +61,14 @@ export function App({ services }: { services: SidePanelServices }) {
   const [settingsStatus, setSettingsStatus] = useState('');
   const [logs, setLogs] = useState<OperationLogEntry[]>([]);
   const [panelSide, setPanelSide] = useState<PanelSide>('unknown');
+  const draftSaveQueue = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     let active = true;
     const initialize = async () => {
-      const [storedSettings, loginState, side, entries] = await Promise.all([
+      const [storedSettings, storedDraft, loginState, side, entries] = await Promise.all([
         services.loadSettings(),
+        services.loadDraft(),
         services.checkXianyuLogin(),
         services.getPanelSide(),
         services.loadLogs()
@@ -74,6 +78,9 @@ export function App({ services }: { services: SidePanelServices }) {
       }
       if (storedSettings !== null) {
         setSettings(storedSettings);
+      }
+      if (storedDraft !== null) {
+        dispatch({ type: 'DRAFT_RESTORED', draft: storedDraft });
       }
       dispatch({ type: 'LOGIN_STATE_CHANGED', loginState });
       setPanelSide(side);
@@ -88,6 +95,37 @@ export function App({ services }: { services: SidePanelServices }) {
       active = false;
     };
   }, [services]);
+
+  useEffect(() => {
+    if (state.draft === null) {
+      return;
+    }
+    const draft = state.draft;
+    draftSaveQueue.current = draftSaveQueue.current
+      .catch(() => undefined)
+      .then(() => services.saveDraft(draft));
+    void draftSaveQueue.current.catch((error: unknown) => {
+      dispatch({ type: 'OPERATION_FAILED', message: `草稿保存失败：${errorMessage(error)}` });
+    });
+  }, [services, state.draft]);
+
+  useEffect(() => {
+    if (state.activeView !== 'logs') {
+      return;
+    }
+    let active = true;
+    void services.loadLogs().then(
+      (entries) => {
+        if (active) {
+          setLogs(entries);
+        }
+      },
+      () => undefined
+    );
+    return () => {
+      active = false;
+    };
+  }, [services, state.activeView]);
 
   const parseProduct = async () => {
     const id = operationId();
@@ -160,8 +198,26 @@ export function App({ services }: { services: SidePanelServices }) {
     }
   };
 
-  const isBusy = state.phase === 'parsing' || state.phase === 'expanding' || state.phase === 'filling';
-  const fillDisabled = state.draft === null || isBusy || state.loginState === 'logged-out';
+  const createManualEntry = () => {
+    const draft = createManualDraft(operationId(), new Date().toISOString());
+    dispatch({ type: 'DRAFT_RESTORED', draft });
+  };
+
+  const isBusy =
+    state.phase === 'parsing' || state.phase === 'expanding' || state.phase === 'filling';
+  const draftReadyToFill =
+    state.draft !== null &&
+    state.draft.title.trim().length > 0 &&
+    state.draft.description.trim().length > 0 &&
+    state.draft.price !== null &&
+    Number.isFinite(state.draft.price) &&
+    state.draft.price > 0 &&
+    state.draft.images.some((image) => image.selected && image.loadStatus === 'loaded');
+  const fillDisabled = !draftReadyToFill || isBusy || state.loginState === 'logged-out';
+  const expansionDisabled =
+    state.draft === null ||
+    isBusy ||
+    (state.draft.title.trim().length === 0 && state.draft.description.trim().length === 0);
 
   return (
     <div className="app-shell">
@@ -197,10 +253,7 @@ export function App({ services }: { services: SidePanelServices }) {
 
         {state.activeView === 'product' ? (
           <>
-            <LoginBanner
-              state={state.loginState}
-              onLogin={() => void services.openXianyuLogin()}
-            />
+            <LoginBanner state={state.loginState} onLogin={() => void services.openXianyuLogin()} />
             <section className="source-card">
               <div className="section-heading">
                 <div>
@@ -234,6 +287,11 @@ export function App({ services }: { services: SidePanelServices }) {
               <p className="inline-status" aria-live="polite">
                 {state.statusMessage}
               </p>
+              {state.draft === null ? (
+                <button className="button button--quiet" type="button" onClick={createManualEntry}>
+                  手动填写
+                </button>
+              ) : null}
               {state.errorMessage === null ? null : (
                 <p className="error-message">{state.errorMessage}</p>
               )}
@@ -243,7 +301,7 @@ export function App({ services }: { services: SidePanelServices }) {
               <section className="empty-state">
                 <span className="empty-state__index">02</span>
                 <h2>编辑与扩写</h2>
-                <p>解析成功后，这里会显示标题、价格、描述和可选图片。</p>
+                <p>解析商品，或选择手动填写，再编辑标题、价格和描述。</p>
               </section>
             ) : (
               <ProductEditor
@@ -283,7 +341,7 @@ export function App({ services }: { services: SidePanelServices }) {
           <button
             className="button button--secondary"
             type="button"
-            disabled={state.draft === null || isBusy}
+            disabled={expansionDisabled}
             onClick={() => void expandDraft()}
           >
             AI 扩写

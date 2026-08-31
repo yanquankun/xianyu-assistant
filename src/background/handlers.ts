@@ -1,12 +1,8 @@
 import { createAiClient } from '../ai/client';
-import { normalizeHttpUrl } from './permissions';
-import {
-  selectSourceTab,
-  selectXianyuTab,
-  type BrowserTab
-} from './tabs';
+import { ensureProductDestination, normalizeHttpUrl } from './permissions';
+import { selectSourceTab, selectXianyuTab, type BrowserTab } from './tabs';
 import type { AppError, AppErrorCode, OperationResult } from '../domain/errors';
-import { runtimeMessageTypes, type RuntimeMessage } from '../domain/messages';
+import { parseParsedProduct, parseRuntimeMessage, type RuntimeMessage } from '../domain/messages';
 import type { ParsedProduct, ProductDraft } from '../domain/product';
 import { createLocalStore, type StorageAreaLike } from '../storage/local-store';
 import type { OperationStage } from '../storage/operation-log';
@@ -18,7 +14,7 @@ import {
   type XianyuTabDependencies
 } from '../xianyu/tab-orchestrator';
 
-const XIANYU_HOME_URL = 'https://www.goofish.com/';
+const XIANYU_LOGIN_URL = 'https://www.goofish.com/login';
 const TAB_LOAD_TIMEOUT_MS = 30_000;
 
 function createStorageArea(): StorageAreaLike {
@@ -51,23 +47,48 @@ async function listTabs(): Promise<BrowserTab[]> {
 }
 
 async function waitForTabComplete(tabId: number): Promise<void> {
-  const current = await browser.tabs.get(tabId);
-  if (current.status === 'complete') {
-    return;
-  }
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      browser.tabs.onUpdated.removeListener(listener);
-      reject(new Error('页面加载超时，请检查网络后重试'));
-    }, TAB_LOAD_TIMEOUT_MS);
-    const listener = (updatedTabId: number, changeInfo: { status?: string }) => {
-      if (updatedTabId === tabId && changeInfo.status === 'complete') {
-        clearTimeout(timeout);
-        browser.tabs.onUpdated.removeListener(listener);
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timeout);
+      browser.tabs.onUpdated.removeListener(updatedListener);
+      browser.tabs.onRemoved.removeListener(removedListener);
+    };
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      if (error === undefined) {
         resolve();
+      } else {
+        reject(error);
       }
     };
-    browser.tabs.onUpdated.addListener(listener);
+    const timeout = setTimeout(() => {
+      finish(new Error('页面加载超时，请检查网络后重试'));
+    }, TAB_LOAD_TIMEOUT_MS);
+    const updatedListener = (updatedTabId: number, changeInfo: { status?: string }) => {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        finish();
+      }
+    };
+    const removedListener = (removedTabId: number) => {
+      if (removedTabId === tabId) {
+        finish(new Error('页面在加载完成前被关闭'));
+      }
+    };
+    browser.tabs.onUpdated.addListener(updatedListener);
+    browser.tabs.onRemoved.addListener(removedListener);
+    void browser.tabs.get(tabId).then(
+      (tab) => {
+        if (tab.status === 'complete') {
+          finish();
+        }
+      },
+      () => finish(new Error('无法读取目标标签页'))
+    );
   });
 }
 
@@ -105,7 +126,14 @@ async function extractProductFromTab(tabId: number): Promise<ParsedProduct> {
     target: { tabId },
     files: ['/product-extractor.js']
   });
-  return browser.tabs.sendMessage(tabId, { type: 'EXTRACT_PRODUCT_DOCUMENT' });
+  const response: unknown = await browser.tabs.sendMessage(tabId, {
+    type: 'EXTRACT_PRODUCT_DOCUMENT'
+  });
+  const product = parseParsedProduct(response);
+  if (product === null) {
+    throw new Error('商品解析结果格式无效');
+  }
+  return product;
 }
 
 async function parseProduct(url: string): Promise<ParsedProduct> {
@@ -114,6 +142,11 @@ async function parseProduct(url: string): Promise<ParsedProduct> {
   const selection = selectSourceTab(tabs, normalized.href);
   if (selection.kind === 'reuse') {
     await waitForTabComplete(selection.tabId);
+    const tab = await browser.tabs.get(selection.tabId);
+    if (tab.url === undefined) {
+      throw new Error('无法读取商品页地址');
+    }
+    ensureProductDestination(normalized, tab.url);
     return extractProductFromTab(selection.tabId);
   }
   const created = await browser.tabs.create({ url: normalized.href, active: false });
@@ -122,6 +155,11 @@ async function parseProduct(url: string): Promise<ParsedProduct> {
   }
   try {
     await waitForTabComplete(created.id);
+    const tab = await browser.tabs.get(created.id);
+    if (tab.url === undefined) {
+      throw new Error('无法读取商品页地址');
+    }
+    ensureProductDestination(normalized, tab.url);
     return await extractProductFromTab(created.id);
   } finally {
     await browser.tabs.remove(created.id).catch(() => undefined);
@@ -149,8 +187,8 @@ function validateDraft(draft: ProductDraft): number {
   if (draft.price === null || !Number.isFinite(draft.price) || draft.price <= 0) {
     throw new Error('请填写有效售价');
   }
-  if (!draft.images.some((image) => image.selected)) {
-    throw new Error('请至少选择一张商品图片');
+  if (!draft.images.some((image) => image.selected && image.loadStatus === 'loaded')) {
+    throw new Error('请至少选择一张已成功加载的商品图片');
   }
   return draft.price;
 }
@@ -161,6 +199,20 @@ function isFillResult(value: unknown): value is OperationResult<FillResult> {
 
 async function fillDraft(draft: ProductDraft): Promise<FillResult> {
   const price = validateDraft(draft);
+  const tabs = await listTabs();
+  const activeTabId = (await browser.tabs.query({ active: true, currentWindow: true })).at(0)?.id;
+  const existing = selectXianyuTab(tabs, activeTabId);
+  if (existing !== null) {
+    const existingLoginState: XianyuLoginState = await browser.tabs.sendMessage(existing.tabId, {
+      type: 'CHECK_XIANYU_LOGIN'
+    });
+    if (existingLoginState === 'logged-out') {
+      throw new Error('需要登录闲鱼');
+    }
+    if (existingLoginState !== 'logged-in') {
+      throw new Error('无法确认闲鱼登录状态，请在闲鱼页面检查后重试');
+    }
+  }
   const tab = await prepareXianyuPublishTab(xianyuTabDependencies());
   const loginState: XianyuLoginState = await browser.tabs.sendMessage(tab.tabId, {
     type: 'CHECK_XIANYU_LOGIN'
@@ -208,20 +260,10 @@ async function openXianyuLogin(): Promise<void> {
   const activeTabId = (await browser.tabs.query({ active: true, currentWindow: true })).at(0)?.id;
   const existing = selectXianyuTab(tabs, activeTabId);
   if (existing === null) {
-    await browser.tabs.create({ url: XIANYU_HOME_URL, active: true });
+    await browser.tabs.create({ url: XIANYU_LOGIN_URL, active: true });
     return;
   }
-  await browser.tabs.update(existing.tabId, { url: XIANYU_HOME_URL, active: true });
-}
-
-function isRuntimeMessage(value: unknown): value is RuntimeMessage {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'type' in value &&
-    typeof value.type === 'string' &&
-    runtimeMessageTypes.includes(value.type as RuntimeMessage['type'])
-  );
+  await browser.tabs.update(existing.tabId, { url: XIANYU_LOGIN_URL, active: true });
 }
 
 function appError(code: AppErrorCode, message: string): AppError {
@@ -235,17 +277,30 @@ function appError(code: AppErrorCode, message: string): AppError {
 
 function codeFor(message: RuntimeMessage, error: unknown): AppErrorCode {
   if (message.type === 'PARSE_PRODUCT') {
-    return error instanceof Error && error.message.includes('URL') ? 'INVALID_URL' : 'PARSE_FAILED';
+    if (error instanceof Error && error.message.includes('URL')) {
+      return 'INVALID_URL';
+    }
+    return error instanceof Error && error.message.includes('超时')
+      ? 'PARSE_TIMEOUT'
+      : 'PARSE_FAILED';
   }
   if (message.type === 'TEST_AI_CONNECTION' || message.type === 'EXPAND_DRAFT') {
-    if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string') {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      typeof error.code === 'string'
+    ) {
       return error.code as AppErrorCode;
     }
     return 'AI_NETWORK_ERROR';
   }
   if (message.type === 'FILL_XIANYU_DRAFT') {
-    return error instanceof Error && error.message.includes('登录')
-      ? 'XIANYU_LOGGED_OUT'
+    if (error instanceof Error && error.message === '需要登录闲鱼') {
+      return 'XIANYU_LOGGED_OUT';
+    }
+    return error instanceof Error && error.message.includes('无法确认闲鱼登录状态')
+      ? 'XIANYU_LOGIN_UNKNOWN'
       : 'XIANYU_FILL_FAILED';
   }
   return 'OPERATION_CANCELLED';
@@ -305,14 +360,34 @@ async function handleRuntimeMessage(message: RuntimeMessage): Promise<OperationR
   }
 }
 
+function isTrustedSidePanelSender(sender: { id?: string; url?: string }): boolean {
+  if (sender.id !== browser.runtime.id || sender.url === undefined) {
+    return false;
+  }
+  try {
+    const senderUrl = new URL(sender.url);
+    const extensionUrl = new URL(browser.runtime.getURL('/'));
+    return senderUrl.origin === extensionUrl.origin && senderUrl.pathname === '/sidepanel.html';
+  } catch {
+    return false;
+  }
+}
+
 export function registerBackgroundHandlers(): void {
-  void store.initialize();
-  void browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-  browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
-    if (!isRuntimeMessage(message)) {
+  void store.initialize().catch((error: unknown) => {
+    console.error('扩展本地存储初始化失败', error);
+  });
+  void browser.sidePanel
+    .setPanelBehavior({ openPanelOnActionClick: true })
+    .catch((error: unknown) => {
+      console.error('扩展侧边栏行为设置失败', error);
+    });
+  browser.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
+    const parsedMessage = parseRuntimeMessage(message);
+    if (parsedMessage === null || !isTrustedSidePanelSender(sender)) {
       return undefined;
     }
-    void handleRuntimeMessage(message).then(sendResponse);
+    void handleRuntimeMessage(parsedMessage).then(sendResponse);
     return true;
   });
 }

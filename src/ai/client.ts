@@ -26,11 +26,18 @@ export interface AiClient {
 
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+const AI_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_AI_CONTENT_LENGTH = 20_000;
+
 function validateSettings(settings: AiSettings): void {
   if (settings.apiKey.trim().length === 0 || settings.model.trim().length === 0) {
     throw new AiClientError('AI_CONFIG_INVALID', '请填写 API Key 和模型名称');
   }
-  if (!Number.isFinite(settings.temperature) || settings.temperature < 0 || settings.temperature > 2) {
+  if (
+    !Number.isFinite(settings.temperature) ||
+    settings.temperature < 0 ||
+    settings.temperature > 2
+  ) {
     throw new AiClientError('AI_CONFIG_INVALID', 'Temperature 必须在 0 到 2 之间');
   }
 }
@@ -44,6 +51,15 @@ export function normalizeChatCompletionsUrl(baseUrl: string): URL {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new AiClientError('AI_CONFIG_INVALID', 'AI Base URL 仅支持 HTTP 或 HTTPS');
+  }
+  const hostname = url.hostname.toLowerCase();
+  const isLocalhost =
+    hostname === 'localhost' ||
+    hostname.endsWith('.localhost') ||
+    hostname === '127.0.0.1' ||
+    hostname === '[::1]';
+  if (url.protocol === 'http:' && !isLocalhost) {
+    throw new AiClientError('AI_CONFIG_INVALID', '远程 AI Base URL 必须使用 HTTPS');
   }
   url.username = '';
   url.password = '';
@@ -64,8 +80,15 @@ function extractContent(payload: unknown): string {
   }
   const choices = payload.choices as unknown[];
   const choice = choices.at(0);
-  if (!isRecord(choice) || !isRecord(choice.message) || typeof choice.message.content !== 'string') {
+  if (
+    !isRecord(choice) ||
+    !isRecord(choice.message) ||
+    typeof choice.message.content !== 'string'
+  ) {
     throw new AiClientError('AI_INVALID_RESPONSE', 'AI 响应缺少消息内容');
+  }
+  if (choice.message.content.length > MAX_AI_CONTENT_LENGTH) {
+    throw new AiClientError('AI_INVALID_RESPONSE', 'AI 响应内容过长');
   }
   return choice.message.content;
 }
@@ -83,13 +106,16 @@ function errorForStatus(status: number): AiClientError {
 async function requestChat(
   fetchImpl: FetchLike,
   settings: AiSettings,
-  messages: readonly ChatMessage[]
+  messages: readonly ChatMessage[],
+  jsonMode: boolean
 ): Promise<string> {
   validateSettings(settings);
   const url = normalizeChatCompletionsUrl(settings.baseUrl);
   let response: Response;
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    response = await fetchImpl(url, {
+    const request = fetchImpl(url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${settings.apiKey}`,
@@ -98,12 +124,27 @@ async function requestChat(
       body: JSON.stringify({
         model: settings.model,
         temperature: settings.temperature,
-        response_format: { type: 'json_object' },
+        ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
         messages
-      })
+      }),
+      signal: controller.signal
     });
-  } catch {
+    const timeoutRequest = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        controller.abort();
+        reject(new AiClientError('AI_NETWORK_ERROR', 'AI 请求超时，请稍后重试'));
+      }, AI_REQUEST_TIMEOUT_MS);
+    });
+    response = await Promise.race([request, timeoutRequest]);
+  } catch (error) {
+    if (error instanceof AiClientError) {
+      throw error;
+    }
     throw new AiClientError('AI_NETWORK_ERROR', '无法连接 AI 接口，请检查地址和网络');
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
   }
   if (!response.ok) {
     throw errorForStatus(response.status);
@@ -120,12 +161,17 @@ async function requestChat(
 export function createAiClient(fetchImpl: FetchLike): AiClient {
   return {
     async testConnection(settings: AiSettings): Promise<AiConnectionResult> {
-      await requestChat(fetchImpl, settings, buildConnectionMessages());
+      await requestChat(fetchImpl, settings, buildConnectionMessages(), false);
       return { connected: true, model: settings.model };
     },
 
     async expandDraft(settings: AiSettings, draft: ProductDraft): Promise<ExpansionPreview> {
-      const content = await requestChat(fetchImpl, settings, buildExpansionMessages(settings, draft));
+      const content = await requestChat(
+        fetchImpl,
+        settings,
+        buildExpansionMessages(settings, draft),
+        true
+      );
       let parsed: unknown;
       try {
         parsed = JSON.parse(content);
