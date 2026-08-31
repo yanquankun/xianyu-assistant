@@ -22,6 +22,13 @@ class MemoryStorageArea implements StorageAreaLike {
     return Promise.resolve();
   }
 
+  remove(keys: string | string[]): Promise<void> {
+    for (const key of Array.isArray(keys) ? keys : [keys]) {
+      delete this.data[key];
+    }
+    return Promise.resolve();
+  }
+
   setAccessLevel(options: { accessLevel: 'TRUSTED_CONTEXTS' }): Promise<void> {
     this.accessLevel = options.accessLevel;
     return Promise.resolve();
@@ -105,6 +112,17 @@ describe('createLocalStore', () => {
 
     await expect(store.getSettings()).resolves.toBeNull();
     await expect(store.getDraft()).resolves.toBeNull();
+  });
+
+  it('清除草稿后不会再次恢复', async () => {
+    const area = new MemoryStorageArea();
+    const store = createLocalStore(area);
+    await store.saveDraft(draft);
+
+    await store.clearDraft();
+
+    await expect(store.getDraft()).resolves.toBeNull();
+    expect(area.data.productDraft).toBeUndefined();
   });
 
   it('追加运行记录时持久化脱敏结果', async () => {

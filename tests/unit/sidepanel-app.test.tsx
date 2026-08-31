@@ -158,15 +158,21 @@ describe('App', () => {
       images: [
         {
           id: 'loaded',
-          url: 'https://img.example.com/loaded.jpg',
-          source: 'dom' as const,
+          location: {
+            kind: 'remote' as const,
+            url: 'https://img.example.com/loaded.jpg',
+            extractedBy: 'dom' as const
+          },
           selected: true,
           loadStatus: 'loaded' as const
         },
         {
           id: 'pending',
-          url: 'https://img.example.com/pending.jpg',
-          source: 'dom' as const,
+          location: {
+            kind: 'remote' as const,
+            url: 'https://img.example.com/pending.jpg',
+            extractedBy: 'dom' as const
+          },
           selected: true,
           loadStatus: 'idle' as const
         }

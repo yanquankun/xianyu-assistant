@@ -141,7 +141,10 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
         phase: 'editing',
         draft: {
           ...action.draft,
-          images: action.draft.images.map((image) => ({ ...image, loadStatus: 'idle' }))
+          images: action.draft.images.map((image) => ({
+            ...image,
+            loadStatus: image.location.kind === 'remote' ? 'idle' : image.loadStatus
+          }))
         },
         expansionPreview: null,
         statusMessage: '已恢复本地草稿',

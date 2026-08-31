@@ -1,4 +1,4 @@
-import type { ProductImage } from '../../domain/product';
+import { getRemoteImageUrl, type ProductImage } from '../../domain/product';
 
 interface ImagePickerProps {
   images: readonly ProductImage[];
@@ -12,29 +12,36 @@ export function ImagePicker({ images, onToggle, onLoadStatus }: ImagePickerProps
   }
   return (
     <div className="image-grid" aria-label="商品图片">
-      {images.map((image, index) => (
-        <label
-          className={`image-tile${image.selected ? ' image-tile--selected' : ''}`}
-          key={image.id}
-        >
-          <img
-            src={image.url}
-            alt={`商品图片 ${String(index + 1)}`}
-            onLoad={() => onLoadStatus(image.id, 'loaded')}
-            onError={() => onLoadStatus(image.id, 'failed')}
-          />
-          <input
-            type="checkbox"
-            checked={image.selected}
-            disabled={image.loadStatus === 'failed'}
-            onChange={() => onToggle(image.id)}
-            aria-label={`选择商品图片 ${String(index + 1)}`}
-          />
-          <span>
-            {image.loadStatus === 'failed' ? '加载失败' : image.selected ? '已选择' : '未选择'}
-          </span>
-        </label>
-      ))}
+      {images.map((image, index) => {
+        const remoteUrl = getRemoteImageUrl(image);
+        return (
+          <label
+            className={`image-tile${image.selected ? ' image-tile--selected' : ''}`}
+            key={image.id}
+          >
+            {remoteUrl === null ? (
+              <span>本地图片将在媒体选择器中显示</span>
+            ) : (
+              <img
+                src={remoteUrl}
+                alt={`商品图片 ${String(index + 1)}`}
+                onLoad={() => onLoadStatus(image.id, 'loaded')}
+                onError={() => onLoadStatus(image.id, 'failed')}
+              />
+            )}
+            <input
+              type="checkbox"
+              checked={image.selected}
+              disabled={image.loadStatus === 'failed'}
+              onChange={() => onToggle(image.id)}
+              aria-label={`选择商品图片 ${String(index + 1)}`}
+            />
+            <span>
+              {image.loadStatus === 'failed' ? '加载失败' : image.selected ? '已选择' : '未选择'}
+            </span>
+          </label>
+        );
+      })}
     </div>
   );
 }

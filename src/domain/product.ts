@@ -4,12 +4,40 @@ export type ExtractionConfidence = 'high' | 'medium' | 'low';
 
 export type ImageLoadStatus = 'idle' | 'loaded' | 'failed';
 
+export type RemoteImageExtractionSource = 'json-ld' | 'open-graph' | 'meta' | 'dom';
+
+export type ProductImageLocation =
+  | {
+      kind: 'remote';
+      url: string;
+      extractedBy: RemoteImageExtractionSource;
+    }
+  | {
+      kind: 'local';
+      assetId: string;
+      fileName: string;
+      mimeType: 'image/jpeg' | 'image/png' | 'image/webp';
+      byteLength: number;
+    };
+
 export interface ProductImage {
   id: string;
-  url: string;
-  source: 'json-ld' | 'open-graph' | 'meta' | 'dom' | 'user';
+  location: ProductImageLocation;
   selected: boolean;
   loadStatus: ImageLoadStatus;
+}
+
+export interface ProductVideo {
+  id: string;
+  assetId: string;
+  fileName: string;
+  mimeType: 'video/mp4' | 'video/quicktime';
+  byteLength: number;
+}
+
+export interface StoredDraftParseResult {
+  draft: ProductDraft;
+  migrated: boolean;
 }
 
 export interface SourceProductFacts {
@@ -31,6 +59,7 @@ export interface ProductDraft {
   originalPrice?: number;
   currency: string;
   images: ProductImage[];
+  video?: ProductVideo;
   warnings: string[];
   confidence: ExtractionConfidence;
   shippingMethod: string;
@@ -49,4 +78,15 @@ export interface ParsedProduct {
   images: ProductImage[];
   warnings: string[];
   confidence: ExtractionConfidence;
+}
+
+export function getRemoteImageUrl(image: ProductImage): string | null {
+  return image.location.kind === 'remote' ? image.location.url : null;
+}
+
+export function getLocalAssetIds(draft: ProductDraft): string[] {
+  const imageIds = draft.images.flatMap((image) =>
+    image.location.kind === 'local' ? [image.location.assetId] : []
+  );
+  return draft.video === undefined ? imageIds : [...imageIds, draft.video.assetId];
 }

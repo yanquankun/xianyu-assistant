@@ -1,6 +1,6 @@
 import type { ProductDraft } from '../domain/product';
 import type { AiSettings } from '../domain/settings';
-import { isAiSettings, isProductDraft } from '../domain/messages';
+import { isAiSettings, parseStoredProductDraft } from '../domain/messages';
 import { appendOperationLog, type OperationLogEntry } from './operation-log';
 
 const SETTINGS_KEY = 'aiSettings';
@@ -10,6 +10,7 @@ const LOGS_KEY = 'operationLogs';
 export interface StorageAreaLike {
   get(keys: string | string[]): Promise<Record<string, unknown>>;
   set(items: Record<string, unknown>): Promise<void>;
+  remove(keys: string | string[]): Promise<void>;
   setAccessLevel?(options: { accessLevel: 'TRUSTED_CONTEXTS' }): Promise<void>;
 }
 
@@ -19,6 +20,7 @@ export interface LocalStore {
   saveSettings(settings: AiSettings): Promise<void>;
   getDraft(): Promise<ProductDraft | null>;
   saveDraft(draft: ProductDraft): Promise<void>;
+  clearDraft(): Promise<void>;
   getLogs(): Promise<OperationLogEntry[]>;
   appendLog(entry: OperationLogEntry): Promise<void>;
 }
@@ -50,11 +52,22 @@ export function createLocalStore(storageArea: StorageAreaLike): LocalStore {
 
     async getDraft(): Promise<ProductDraft | null> {
       const value = await readValue<unknown>(storageArea, DRAFT_KEY);
-      return isProductDraft(value) ? value : null;
+      const result = parseStoredProductDraft(value);
+      if (result === null) {
+        return null;
+      }
+      if (result.migrated) {
+        await storageArea.set({ [DRAFT_KEY]: cloneValue(result.draft) });
+      }
+      return result.draft;
     },
 
     async saveDraft(draft: ProductDraft): Promise<void> {
       await storageArea.set({ [DRAFT_KEY]: cloneValue(draft) });
+    },
+
+    async clearDraft(): Promise<void> {
+      await storageArea.remove(DRAFT_KEY);
     },
 
     async getLogs(): Promise<OperationLogEntry[]> {

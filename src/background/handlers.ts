@@ -34,6 +34,7 @@ function createStorageArea(): StorageAreaLike {
   return {
     get: (keys) => browser.storage.local.get(keys),
     set: (items) => browser.storage.local.set(items),
+    remove: (keys) => browser.storage.local.remove(keys),
     setAccessLevel: (options) => browser.storage.local.setAccessLevel(options)
   };
 }

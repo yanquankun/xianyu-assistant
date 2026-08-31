@@ -62,8 +62,11 @@ describe('reduceWorkflow', () => {
         images: [
           {
             id: 'stored-image',
-            url: 'https://img.example.com/stored.jpg',
-            source: 'dom',
+            location: {
+              kind: 'remote',
+              url: 'https://img.example.com/stored.jpg',
+              extractedBy: 'dom'
+            },
             selected: true,
             loadStatus: 'loaded'
           }
@@ -141,15 +144,21 @@ describe('reduceWorkflow', () => {
         images: [
           {
             id: 'image-1',
-            url: 'https://img.example.com/1.jpg',
-            source: 'dom' as const,
+            location: {
+              kind: 'remote' as const,
+              url: 'https://img.example.com/1.jpg',
+              extractedBy: 'dom' as const
+            },
             selected: true,
             loadStatus: 'idle' as const
           },
           {
             id: 'image-2',
-            url: 'https://img.example.com/2.jpg',
-            source: 'dom' as const,
+            location: {
+              kind: 'remote' as const,
+              url: 'https://img.example.com/2.jpg',
+              extractedBy: 'dom' as const
+            },
             selected: true,
             loadStatus: 'idle' as const
           }

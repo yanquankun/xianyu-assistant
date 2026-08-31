@@ -134,8 +134,11 @@ describe('fillXianyuDraft', () => {
 describe('downloadSelectedImages', () => {
   const selectedImage: ProductImage = {
     id: 'selected',
-    url: 'https://img.example.com/selected.png',
-    source: 'open-graph',
+    location: {
+      kind: 'remote',
+      url: 'https://img.example.com/selected.png',
+      extractedBy: 'open-graph'
+    },
     selected: true,
     loadStatus: 'loaded'
   };
@@ -143,8 +146,11 @@ describe('downloadSelectedImages', () => {
     selectedImage,
     {
       id: 'ignored',
-      url: 'https://img.example.com/ignored.png',
-      source: 'open-graph',
+      location: {
+        kind: 'remote',
+        url: 'https://img.example.com/ignored.png',
+        extractedBy: 'open-graph'
+      },
       selected: false,
       loadStatus: 'loaded'
     }
@@ -269,7 +275,11 @@ describe('downloadSelectedImages', () => {
     const selected = Array.from({ length: 10 }, (_, index) => ({
       ...selectedImage,
       id: `image-${String(index + 1)}`,
-      url: `https://img.example.com/${String(index + 1)}.png`
+      location: {
+        kind: 'remote' as const,
+        url: `https://img.example.com/${String(index + 1)}.png`,
+        extractedBy: 'open-graph' as const
+      }
     }));
     let requests = 0;
 
@@ -289,7 +299,11 @@ describe('downloadSelectedImages', () => {
     const selected = Array.from({ length: 3 }, (_, index) => ({
       ...selectedImage,
       id: `large-${String(index + 1)}`,
-      url: `https://img.example.com/large-${String(index + 1)}.png`
+      location: {
+        kind: 'remote' as const,
+        url: `https://img.example.com/large-${String(index + 1)}.png`,
+        extractedBy: 'open-graph' as const
+      }
     }));
 
     const result = await downloadSelectedImages(

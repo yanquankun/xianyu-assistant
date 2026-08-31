@@ -11,8 +11,11 @@ describe('ImagePicker', () => {
         images={[
           {
             id: 'image-1',
-            url: 'https://img.example.com/1.png',
-            source: 'open-graph',
+            location: {
+              kind: 'remote',
+              url: 'https://img.example.com/1.png',
+              extractedBy: 'open-graph'
+            },
             selected: true,
             loadStatus: 'idle'
           }
@@ -31,8 +34,11 @@ describe('ImagePicker', () => {
         images={[
           {
             id: 'image-1',
-            url: 'https://img.example.com/1.png',
-            source: 'open-graph',
+            location: {
+              kind: 'remote',
+              url: 'https://img.example.com/1.png',
+              extractedBy: 'open-graph'
+            },
             selected: false,
             loadStatus: 'failed'
           }

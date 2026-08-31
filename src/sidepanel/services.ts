@@ -3,7 +3,7 @@ import type { ExpansionPreview } from '../ai/validation';
 import { getRequestedOrigin, normalizeHttpUrl } from '../background/permissions';
 import type { OperationResult } from '../domain/errors';
 import type { RuntimeMessage } from '../domain/messages';
-import type { ParsedProduct, ProductDraft } from '../domain/product';
+import { getRemoteImageUrl, type ParsedProduct, type ProductDraft } from '../domain/product';
 import type { AiSettings } from '../domain/settings';
 import { createLocalStore, type LocalStore, type StorageAreaLike } from '../storage/local-store';
 import type { OperationLogEntry, OperationStage } from '../storage/operation-log';
@@ -15,6 +15,7 @@ function storageArea(): StorageAreaLike {
   return {
     get: (keys) => browser.storage.local.get(keys),
     set: (items) => browser.storage.local.set(items),
+    remove: (keys) => browser.storage.local.remove(keys),
     setAccessLevel: (options) => browser.storage.local.setAccessLevel(options)
   };
 }
@@ -80,11 +81,19 @@ function operationId(): string {
 
 function sourceOrigins(draft: ProductDraft): string[] {
   const origins: string[] = [];
-  for (const image of draft.images
-    .filter((candidate) => candidate.selected && candidate.loadStatus === 'loaded')
-    .slice(0, 9)) {
-    const normalized = normalizeHttpUrl(image.url);
+  for (const image of draft.images) {
+    if (!image.selected || image.loadStatus !== 'loaded') {
+      continue;
+    }
+    const remoteUrl = getRemoteImageUrl(image);
+    if (remoteUrl === null) {
+      continue;
+    }
+    const normalized = normalizeHttpUrl(remoteUrl);
     origins.push(getRequestedOrigin(normalized.url));
+    if (origins.length === 9) {
+      break;
+    }
   }
   return origins;
 }

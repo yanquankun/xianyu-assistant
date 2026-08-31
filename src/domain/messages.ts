@@ -1,5 +1,13 @@
 import type { AiSettings } from './settings';
-import type { ParsedProduct, ProductDraft } from './product';
+import type {
+  ParsedProduct,
+  ProductDraft,
+  ProductImage,
+  ProductImageLocation,
+  ProductVideo,
+  RemoteImageExtractionSource,
+  StoredDraftParseResult
+} from './product';
 
 export type RuntimeMessage =
   | { type: 'PARSE_PRODUCT'; operationId: string; url: string }
@@ -61,16 +69,49 @@ export function isAiSettings(value: unknown): value is AiSettings {
   );
 }
 
-function isProductImage(value: unknown): boolean {
+function isRemoteImageExtractionSource(value: unknown): value is RemoteImageExtractionSource {
+  return typeof value === 'string' && ['json-ld', 'open-graph', 'meta', 'dom'].includes(value);
+}
+
+function isProductImageLocation(value: unknown): value is ProductImageLocation {
+  if (!isRecord(value) || typeof value.kind !== 'string') {
+    return false;
+  }
+  if (value.kind === 'remote') {
+    return isText(value.url, 4_096, false) && isRemoteImageExtractionSource(value.extractedBy);
+  }
+  return (
+    value.kind === 'local' &&
+    isText(value.assetId, 200, false) &&
+    isText(value.fileName, 300, false) &&
+    typeof value.mimeType === 'string' &&
+    ['image/jpeg', 'image/png', 'image/webp'].includes(value.mimeType) &&
+    isFiniteNumber(value.byteLength) &&
+    value.byteLength > 0
+  );
+}
+
+function isProductImage(value: unknown): value is ProductImage {
   return (
     isRecord(value) &&
     isText(value.id, 200, false) &&
-    isText(value.url, 4_096, false) &&
-    typeof value.source === 'string' &&
-    ['json-ld', 'open-graph', 'meta', 'dom', 'user'].includes(value.source) &&
+    isProductImageLocation(value.location) &&
     typeof value.selected === 'boolean' &&
     typeof value.loadStatus === 'string' &&
     ['idle', 'loaded', 'failed'].includes(value.loadStatus)
+  );
+}
+
+function isProductVideo(value: unknown): value is ProductVideo {
+  return (
+    isRecord(value) &&
+    isText(value.id, 200, false) &&
+    isText(value.assetId, 200, false) &&
+    isText(value.fileName, 300, false) &&
+    typeof value.mimeType === 'string' &&
+    ['video/mp4', 'video/quicktime'].includes(value.mimeType) &&
+    isFiniteNumber(value.byteLength) &&
+    value.byteLength > 0
   );
 }
 
@@ -101,6 +142,7 @@ export function isProductDraft(value: unknown): value is ProductDraft {
     Array.isArray(value.images) &&
     value.images.length <= MAX_IMAGES &&
     value.images.every(isProductImage) &&
+    (value.video === undefined || isProductVideo(value.video)) &&
     isStringArray(value.warnings, 100) &&
     typeof value.confidence === 'string' &&
     ['high', 'medium', 'low'].includes(value.confidence) &&
@@ -108,6 +150,69 @@ export function isProductDraft(value: unknown): value is ProductDraft {
     isText(value.categoryNote, 1_000) &&
     isText(value.updatedAt, 100, false)
   );
+}
+
+function migrateLegacyImage(value: unknown): ProductImage | null {
+  if (
+    !isRecord(value) ||
+    !isText(value.id, 200, false) ||
+    !isText(value.url, 4_096, false) ||
+    !isRemoteImageExtractionSource(value.source) ||
+    typeof value.selected !== 'boolean' ||
+    typeof value.loadStatus !== 'string' ||
+    !['idle', 'loaded', 'failed'].includes(value.loadStatus)
+  ) {
+    return null;
+  }
+  return {
+    id: value.id,
+    location: { kind: 'remote', url: value.url, extractedBy: value.source },
+    selected: value.selected,
+    loadStatus: value.loadStatus as ProductImage['loadStatus']
+  };
+}
+
+export function parseStoredProductDraft(value: unknown): StoredDraftParseResult | null {
+  if (isProductDraft(value)) {
+    return { draft: value, migrated: false };
+  }
+  if (!isRecord(value) || !Array.isArray(value.images)) {
+    return null;
+  }
+  const images: ProductImage[] = [];
+  let removedImage = false;
+  let migrated = false;
+  for (const image of value.images.slice(0, MAX_IMAGES)) {
+    if (isProductImage(image)) {
+      images.push(image);
+      continue;
+    }
+    const legacyImage = migrateLegacyImage(image);
+    if (legacyImage === null) {
+      removedImage = true;
+      continue;
+    }
+    images.push(legacyImage);
+    migrated = true;
+  }
+  if (value.images.length > MAX_IMAGES) {
+    removedImage = true;
+  }
+  const warnings = isStringArray(value.warnings, 100) ? [...value.warnings] : null;
+  if (warnings === null) {
+    return null;
+  }
+  if (removedImage && !warnings.includes('已移除无法恢复的旧版图片')) {
+    if (warnings.length === 100) {
+      return null;
+    }
+    warnings.push('已移除无法恢复的旧版图片');
+  }
+  const candidate = { ...value, images, warnings };
+  if (!isProductDraft(candidate)) {
+    return null;
+  }
+  return { draft: candidate, migrated: migrated || removedImage };
 }
 
 export function parseParsedProduct(value: unknown): ParsedProduct | null {

@@ -46,9 +46,12 @@ function mergeImages(candidates: readonly ParseCandidate[], pageUrl: string): Pr
       seen.add(identity);
       images.push({
         id: `image-${String(images.length + 1)}`,
-        url,
-        source: candidate.source,
-        selected: true,
+        location: {
+          kind: 'remote',
+          url,
+          extractedBy: candidate.source
+        },
+        selected: images.length < 9,
         loadStatus: 'idle'
       });
       if (images.length === MAX_PRODUCT_IMAGES) {

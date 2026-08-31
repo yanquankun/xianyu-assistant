@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { getRemoteImageUrl } from '../../src/domain/product';
 import { parseProductDocument } from '../../src/parsers/common';
 
 function parseFixture(name: string, pageUrl: string) {
@@ -23,7 +24,7 @@ describe('parseProductDocument', () => {
     expect(result.title).toBe('测试商品');
     expect(result.description).toBe('结构化商品描述');
     expect(result.price).toBe(99.9);
-    expect(result.images.map((image) => image.url)).toEqual([
+    expect(result.images.map(getRemoteImageUrl)).toEqual([
       'https://img.example.com/a.jpg?size=large',
       'https://img.example.com/b.jpg'
     ]);
@@ -37,7 +38,7 @@ describe('parseProductDocument', () => {
     expect(result.title).toBe('京东结构化商品');
     expect(result.price).toBe(1299);
     expect(result.currency).toBe('CNY');
-    expect(result.images.map((image) => image.url)).toEqual([
+    expect(result.images.map(getRemoteImageUrl)).toEqual([
       'https://img.example.com/jd-1.jpg',
       'https://img.example.com/jd-2.jpg',
       'https://img.example.com/jd-3.jpg',
@@ -63,7 +64,7 @@ describe('parseProductDocument', () => {
     expect(result.platform).toBe('generic');
     expect(result.title).toBe('通用商品');
     expect(result.price).toBe(66.5);
-    expect(result.images.map((image) => image.url)).toEqual([
+    expect(result.images.map(getRemoteImageUrl)).toEqual([
       'https://shop.example.com/cover.jpg'
     ]);
     expect(result.warnings).toContain('页面结构化商品数据无法解析，已使用页面信息降级');
@@ -97,6 +98,6 @@ describe('parseProductDocument', () => {
     const result = parseProductDocument(document, 'https://shop.example.com/product/many-images');
 
     expect(result.images).toHaveLength(20);
-    expect(result.images.at(-1)?.url).toBe('https://shop.example.com/image-20.jpg');
+    expect(getRemoteImageUrl(result.images.at(-1)!)).toBe('https://shop.example.com/image-20.jpg');
   });
 });

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { REQUIRED_PERMISSIONS } from '../../wxt.config';
+
 import {
   ensureProductDestination,
   getRequestedOrigin,
@@ -62,6 +64,15 @@ describe('ensureProductDestination', () => {
     ).toThrow('商品页跳转到了登录或验证页面');
     expect(() => ensureProductDestination(source, 'https://example.com/login')).toThrow(
       '商品页跳转到了不受支持的站点'
+    );
+  });
+});
+
+describe('REQUIRED_PERMISSIONS', () => {
+  it('使用扩展持久化需要的最小权限', () => {
+    expect(REQUIRED_PERMISSIONS).toContain('unlimitedStorage');
+    expect(REQUIRED_PERMISSIONS).not.toEqual(
+      expect.arrayContaining(['cookies', 'debugger', 'history'])
     );
   });
 });

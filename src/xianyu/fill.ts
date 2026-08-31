@@ -1,4 +1,4 @@
-import type { ProductImage } from '../domain/product';
+import { getRemoteImageUrl, type ProductImage } from '../domain/product';
 import type { AppError, OperationResult } from '../domain/errors';
 import { fillFileInput, fillTextControl, findFileInput, findTextControl } from './dom';
 
@@ -19,7 +19,7 @@ export interface TransferableImage {
 
 export interface ImageDownloadFailure {
   id: string;
-  url: string;
+  url?: string;
   message: string;
 }
 
@@ -213,13 +213,14 @@ async function readBoundedImageBytes(response: Response): Promise<Uint8Array> {
 
 async function downloadImage(
   fetchImpl: ImageFetchLike,
-  image: ProductImage
+  image: ProductImage,
+  remoteUrl: string
 ): Promise<{ file: TransferableImage; byteLength: number }> {
   const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     const request = (async () => {
-      const response = await fetchImpl(image.url, {
+      const response = await fetchImpl(remoteUrl, {
         method: 'GET',
         credentials: 'omit',
         signal: controller.signal
@@ -275,27 +276,38 @@ export async function downloadSelectedImages(
   const selected = images.filter((candidate) => candidate.selected);
   const ready = selected.filter((candidate) => candidate.loadStatus === 'loaded');
   for (const image of selected.filter((candidate) => candidate.loadStatus !== 'loaded')) {
-    failures.push({
-      id: image.id,
-      url: image.url,
-      message: '图片尚未成功加载'
-    });
+    const remoteUrl = getRemoteImageUrl(image);
+    failures.push(
+      remoteUrl === null
+        ? { id: image.id, message: '图片尚未成功加载' }
+        : { id: image.id, url: remoteUrl, message: '图片尚未成功加载' }
+    );
   }
   for (const image of ready.slice(MAX_IMAGE_COUNT)) {
-    failures.push({
-      id: image.id,
-      url: image.url,
-      message: `扩展每次最多处理 ${String(MAX_IMAGE_COUNT)} 张图片`
-    });
+    const remoteUrl = getRemoteImageUrl(image);
+    failures.push(
+      remoteUrl === null
+        ? { id: image.id, message: `扩展每次最多处理 ${String(MAX_IMAGE_COUNT)} 张图片` }
+        : {
+            id: image.id,
+            url: remoteUrl,
+            message: `扩展每次最多处理 ${String(MAX_IMAGE_COUNT)} 张图片`
+          }
+    );
   }
   let totalBytes = 0;
   for (const image of ready.slice(0, MAX_IMAGE_COUNT)) {
+    const remoteUrl = getRemoteImageUrl(image);
+    if (remoteUrl === null) {
+      failures.push({ id: image.id, message: '本地图片将在媒体填充阶段处理' });
+      continue;
+    }
     try {
-      const downloaded = await downloadImage(fetchImpl, image);
+      const downloaded = await downloadImage(fetchImpl, image, remoteUrl);
       if (totalBytes + downloaded.byteLength > MAX_TOTAL_IMAGE_BYTES) {
         failures.push({
           id: image.id,
-          url: image.url,
+          url: remoteUrl,
           message: '图片总量超过 20 MB 上限'
         });
         continue;
@@ -305,7 +317,7 @@ export async function downloadSelectedImages(
     } catch (error) {
       failures.push({
         id: image.id,
-        url: image.url,
+        url: remoteUrl,
         message: error instanceof Error ? error.message : '图片处理失败'
       });
     }

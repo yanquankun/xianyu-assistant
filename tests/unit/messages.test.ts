@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isProductDraft,
   parseParsedProduct,
+  parseStoredProductDraft,
   parseRuntimeMessage,
   runtimeMessageTypes
 } from '../../src/domain/messages';
@@ -98,5 +100,49 @@ describe('parseRuntimeMessage', () => {
         confidence: 'high'
       })
     ).toBeNull();
+  });
+});
+
+describe('parseStoredProductDraft', () => {
+  it('把旧版远程图片迁移为可判别位置结构', () => {
+    const result = parseStoredProductDraft({
+      ...draft,
+      images: [
+        {
+          id: 'legacy-image',
+          url: 'https://img.example.com/a.jpg',
+          source: 'dom',
+          selected: true,
+          loadStatus: 'loaded'
+        }
+      ]
+    });
+
+    expect(result).toEqual({
+      migrated: true,
+      draft: expect.objectContaining({
+        images: [
+          expect.objectContaining({
+            id: 'legacy-image',
+            location: {
+              kind: 'remote',
+              url: 'https://img.example.com/a.jpg',
+              extractedBy: 'dom'
+            }
+          })
+        ]
+      })
+    });
+  });
+
+  it('拒绝同时缺少远程地址和本地资源标识的图片', () => {
+    expect(
+      isProductDraft({
+        ...draft,
+        images: [
+          { id: 'bad', location: { kind: 'local' }, selected: true, loadStatus: 'loaded' }
+        ]
+      })
+    ).toBe(false);
   });
 });
