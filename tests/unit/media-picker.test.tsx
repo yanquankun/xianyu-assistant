@@ -277,4 +277,71 @@ describe('MediaPicker', () => {
     expect(createObjectURL).not.toHaveBeenCalled();
     expect(revokeObjectURL).not.toHaveBeenCalled();
   });
+
+  it('视频预览将原生 controls 纳入 Tab 焦点循环并恢复触发元素焦点', async () => {
+    const createObjectURL = vi.fn(() => 'blob:video-preview');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', { createObjectURL, revokeObjectURL });
+    render(
+      <MediaPicker
+        images={[]}
+        video={{
+          id: 'local-video',
+          assetId: 'asset-video',
+          fileName: 'demo.mp4',
+          mimeType: 'video/mp4',
+          byteLength: 5
+        }}
+        selectedCount={0}
+        resolveLocalAsset={() =>
+          Promise.resolve({
+            assetId: 'asset-video',
+            kind: 'video',
+            fileName: 'demo.mp4',
+            mimeType: 'video/mp4',
+            byteLength: 5,
+            createdAt: '2026-08-31T13:00:00.000Z',
+            blob: new Blob(['video'], { type: 'video/mp4' })
+          })
+        }
+        onUploadImages={() => undefined}
+        onUploadVideo={() => undefined}
+        onToggle={() => undefined}
+        onRemoveImage={() => undefined}
+        onRemoveVideo={() => undefined}
+        onLoadStatus={() => undefined}
+      />
+    );
+
+    const trigger = screen.getByRole('button', { name: '预览商品视频' });
+    fireEvent.click(trigger);
+    const video = await screen.findByLabelText('demo.mp4');
+    const closeButton = screen.getByRole('button', { name: '关闭媒体预览' });
+    expect(closeButton).toHaveFocus();
+
+    video.focus();
+    fireEvent.keyDown(video, { key: 'Tab' });
+    expect(closeButton).toHaveFocus();
+    fireEvent.keyDown(closeButton, { key: 'Tab', shiftKey: true });
+    expect(video).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '媒体预览' })).toBeNull());
+    expect(trigger).toHaveFocus();
+
+    fireEvent.click(trigger);
+    const dialog = await screen.findByRole('dialog', { name: '媒体预览' });
+    const backdrop = dialog.parentElement;
+    if (backdrop === null) {
+      throw new Error('未找到媒体预览遮罩');
+    }
+    fireEvent.click(backdrop);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '媒体预览' })).toBeNull());
+    expect(trigger).toHaveFocus();
+
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole('button', { name: '关闭媒体预览' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '媒体预览' })).toBeNull());
+    expect(trigger).toHaveFocus();
+  });
 });
