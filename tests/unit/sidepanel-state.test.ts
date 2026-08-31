@@ -113,32 +113,33 @@ describe('reduceWorkflow', () => {
   });
 
   it('AI 结果直接写回标题描述并合并去重警告', () => {
+    const draftWithWarnings = { ...draft, warnings: ['已有警告', '信息不足'] };
     const started = reduceWorkflow(
-      { ...initialWorkflowState, phase: 'editing' as const, draft },
+      { ...initialWorkflowState, phase: 'editing' as const, draft: draftWithWarnings },
       {
         type: 'EXPANSION_STARTED',
-        draftId: draft.id,
-        draftUpdatedAt: draft.updatedAt
+        draftId: draftWithWarnings.id,
+        draftUpdatedAt: draftWithWarnings.updatedAt
       }
     );
     const result = reduceWorkflow(started, {
       type: 'EXPANSION_RECEIVED',
-      draftId: draft.id,
-      draftUpdatedAt: draft.updatedAt,
+      draftId: draftWithWarnings.id,
+      draftUpdatedAt: draftWithWarnings.updatedAt,
       preview: {
         title: '扩写标题',
         description: '扩写描述',
-        warnings: ['信息不足'],
-        factWarnings: ['信息不足', '出现新数字']
+        warnings: ['信息不足', '普通警告'],
+        factWarnings: ['普通警告', '出现新数字', '已有警告']
       },
       now: '2026-08-31T13:10:00.000Z'
     });
 
     expect(result.draft).toEqual({
-      ...draft,
+      ...draftWithWarnings,
       title: '扩写标题',
       description: '扩写描述',
-      warnings: ['信息不足', '出现新数字'],
+      warnings: ['已有警告', '信息不足', '普通警告', '出现新数字'],
       updatedAt: '2026-08-31T13:10:00.000Z'
     });
     expect(result.statusMessage).toBe('AI 文案已写入表单');
@@ -168,6 +169,39 @@ describe('reduceWorkflow', () => {
 
     expect(result).toBe(expanding);
     expect(result.draft?.title).toBe('用户刚修改');
+  });
+
+  it('新解析开始后丢弃旧 AI 结果', () => {
+    const expanding = reduceWorkflow(
+      { ...initialWorkflowState, phase: 'editing' as const, draft },
+      {
+        type: 'EXPANSION_STARTED',
+        draftId: draft.id,
+        draftUpdatedAt: draft.updatedAt
+      }
+    );
+    const parsing = reduceWorkflow(expanding, {
+      type: 'PARSE_STARTED',
+      operationId: 'new-parse',
+      url: 'https://item.jd.com/2.html'
+    });
+    const result = reduceWorkflow(parsing, {
+      type: 'EXPANSION_RECEIVED',
+      draftId: draft.id,
+      draftUpdatedAt: draft.updatedAt,
+      preview: {
+        title: '不应写回的标题',
+        description: '不应写回的描述',
+        warnings: [],
+        factWarnings: []
+      },
+      now: '2026-08-31T13:10:00.000Z'
+    });
+
+    expect(parsing.expansionTarget).toBeNull();
+    expect(result).toBe(parsing);
+    expect(result.phase).toBe('parsing');
+    expect(result.draft?.title).toBe(draft.title);
   });
 
   it('AI 扩写失败时保留原草稿并恢复编辑状态', () => {

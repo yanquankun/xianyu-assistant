@@ -129,6 +129,7 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
         phase: 'parsing',
         activeOperationId: action.operationId,
         sourceUrl: action.url,
+        expansionTarget: null,
         statusMessage: '正在解析商品页面',
         errorMessage: null
       };

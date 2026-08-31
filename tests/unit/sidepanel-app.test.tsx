@@ -146,6 +146,10 @@ describe('App', () => {
     const loadingButton = screen.getByRole('button', { name: 'AI 扩写中' });
     expect(loadingButton).toBeDisabled();
     expect(loadingButton).toHaveAttribute('aria-busy', 'true');
+    expect(loadingButton.querySelector('.ai-expansion-spinner')).toHaveAttribute(
+      'aria-hidden',
+      'true'
+    );
 
     expansion.resolve({
       title: '扩写后标题',

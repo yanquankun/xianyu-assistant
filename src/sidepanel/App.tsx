@@ -549,7 +549,7 @@ export function App({ services }: { services: SidePanelServices }) {
             onClick={() => void expandDraft()}
           >
             {state.phase === 'expanding' ? (
-              <span className="media-preview-spinner" aria-hidden="true" />
+              <span className="ai-expansion-spinner" aria-hidden="true" />
             ) : null}
             {state.phase === 'expanding' ? 'AI 扩写中' : 'AI 扩写'}
           </button>
