@@ -2,7 +2,7 @@
 
 > **面向智能代理执行者：** 必须使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans，按任务逐项实施。本计划使用复选框跟踪步骤。
 
-**目标：** 在保持用户手动最终发布和现有 CRX 交付能力的前提下，实现 AI 扩写直接回填、本地图片与视频、登录刷新、草稿返回初始态及可展开运行记录。
+**目标：** 在保持用户手动最终发布和现有 CRX 交付能力的前提下，实现 AI 扩写直接回填、本地图片与视频、登录刷新、草稿返回初始态、可展开运行记录，以及淘宝和京东分享文案与短链的安全解析。
 
 **架构：** 以可迁移的 ProductDraft 媒体引用为核心，小体积元数据留在 chrome.storage.local，Blob 存入扩展域 IndexedDB；侧边栏只调用强类型服务，后台协调权限、日志和闲鱼标签页，内容脚本只负责可验证的 DOM 填写。视频通过绑定目标标签页的短期分块会话传给闲鱼内容脚本，所有路径继续停在用户手动发布之前。
 
@@ -23,11 +23,13 @@
 - 视频支持 1 个 MP4 或 MOV，最大 100 MB；无法识别闲鱼视频控件时返回跳过项，不回滚已填写文本和图片。
 - API Key、Cookie、Authorization、媒体二进制、对象 URL 和本地绝对路径不得进入运行记录。
 - 所有自动化路径不得查找、点击或触发闲鱼最终发布按钮。
+- 分享文案只提取第一个 HTTP(S) URL 和可选书名号标题，不保存整段分享文案；错误页标题不得进入草稿。
+- `3.cn` 只允许落到京东域名族，`e.tb.cn` 只允许落到淘宝或天猫域名族；自动化测试使用本地夹具，不请求真实短链。
 - 每个任务先写失败测试，再写最小实现；每次提交只暂存任务列出的文件。
 
 ---
 
-### 任务 1：升级草稿媒体模型并兼容旧草稿
+### Task 1：升级草稿媒体模型并兼容旧草稿
 
 **文件：**
 
@@ -276,7 +278,7 @@ git commit -m "feat: 升级草稿媒体模型"
 
 ---
 
-### 任务 2：实现本地媒体校验与 IndexedDB 仓储
+### Task 2：实现本地媒体校验与 IndexedDB 仓储
 
 **文件：**
 
@@ -435,7 +437,7 @@ git commit -m "feat: 持久化本地商品媒体"
 
 ---
 
-### 任务 3：实现图片批量上传、视频选择与顶层预览
+### Task 3：实现图片批量上传、视频选择与顶层预览
 
 **文件：**
 
@@ -633,7 +635,7 @@ git commit -m "feat: 添加本地图片和视频编辑"
 
 ---
 
-### 任务 4：把 AI 扩写改为加载后直接写回
+### Task 4：把 AI 扩写改为加载后直接写回
 
 **文件：**
 
@@ -770,7 +772,7 @@ git commit -m "feat: AI 扩写完成后直接回填"
 
 ---
 
-### 任务 5：增加登录状态手动刷新
+### Task 5：增加登录状态手动刷新
 
 **文件：**
 
@@ -883,7 +885,7 @@ git commit -m "feat: 支持刷新闲鱼登录状态"
 
 ---
 
-### 任务 6：显示步骤 02 并安全返回初始状态
+### Task 6：显示步骤 02 并安全返回初始状态
 
 **文件：**
 
@@ -1021,7 +1023,7 @@ git commit -m "feat: 支持返回商品整理初始状态"
 
 ---
 
-### 任务 7：保存可脱敏的运行记录快照并展开详情
+### Task 7：保存可脱敏的运行记录快照并展开详情
 
 **文件：**
 
@@ -1172,7 +1174,7 @@ git commit -m "feat: 展示运行记录快照详情"
 
 ---
 
-### 任务 8：把本地图片与视频安全填入闲鱼
+### Task 8：把本地图片与视频安全填入闲鱼
 
 **文件：**
 
@@ -1390,7 +1392,135 @@ git commit -m "feat: 填入本地图片和商品视频"
 
 ---
 
-### 任务 9：完成端到端回归、中文文档和构建验收
+### Task 9：解析淘宝京东分享文案与平台短链
+
+**文件：**
+
+- 新增：src/background/product-input.ts
+- 新增：src/background/tab-settle.ts
+- 修改：src/background/permissions.ts
+- 修改：src/background/tabs.ts
+- 修改：src/background/handlers.ts
+- 修改：src/domain/product.ts
+- 修改：src/domain/messages.ts
+- 修改：src/sidepanel/services.ts
+- 修改：src/parsers/common.ts
+- 修改：src/parsers/generic.ts
+- 修改：entrypoints/product-extractor.ts
+- 新增：tests/unit/product-input.test.ts
+- 新增：tests/unit/tab-settle.test.ts
+- 修改：tests/unit/permissions.test.ts
+- 修改：tests/unit/messages.test.ts
+- 修改：tests/unit/parsers.test.ts
+- 修改：tests/unit/background-tabs.test.ts
+- 修改：tests/unit/storage.test.ts
+- 修改：tests/unit/operation-log.test.ts
+
+**接口：**
+
+- 产出：`parseProductInput`，把纯 URL 或分享文案转换为 `submittedUrl`、`platformHint` 和可选 `hintedTitle`。
+- 产出：`getProductPermissionOrigins`，按短链及目标平台域名族返回最小可选权限集合。
+- 产出：`waitForTabSettled`，等待 `complete` 且 URL 在安静窗口内不再变化。
+- 产出：`detectProductPageError` 与可判别的商品提取成功/失败响应。
+- `ProductDraft` 增加可选 `submittedUrl`；`canonicalUrl` 继续表示最终规范商品页。
+- 运行记录快照同时支持 `sourceUrl` 与 `canonicalUrl`。
+
+- [ ] **步骤 1：先为分享输入解析写失败测试**
+
+在 tests/unit/product-input.test.ts 覆盖：
+
+```ts
+const jd = parseProductInput(
+  '【京东】[https://3.cn/31-f4Z6b?jkl=@XCWZK4OtWu@](https://3.cn/31-f4Z6b?jkl=@XCWZK4OtWu@) CA1507 「卡西欧男士运动手表节日礼物」 点击链接直接打开'
+);
+expect(jd.submittedUrl).toBe('https://3.cn/31-f4Z6b?jkl=@XCWZK4OtWu@');
+expect(jd.hintedTitle).toBe('卡西欧男士运动手表节日礼物');
+expect(jd.platformHint).toBe('jd');
+```
+
+再覆盖淘宝示例、纯 URL、Markdown 重复 URL、链接末尾中英文标点、分享码不会成为标题、空输入和没有 URL 的文案失败。
+
+- [ ] **步骤 2：实现纯分享输入解析器**
+
+src/background/product-input.ts 使用显式 HTTP(S) URL 提取和现有 URL 规范化逻辑：
+
+1. 提取输入中的第一个 HTTP(S) URL。
+2. 去除 Markdown 右括号和句末 `，。；、,.;` 等标点，但保留 URL 查询中的 `@`。
+3. 根据 `3.cn`、`e.tb.cn` 或正式平台主机分类平台。
+4. 只提取第一组非空 `「...」` 作为 `hintedTitle`；无书名号时不从分享码或其他文本猜标题。
+
+RuntimeMessage 的 PARSE_PRODUCT 只传递提取后的 `submittedUrl`、规范 URL 和可选 `hintedTitle`，不传递整段分享文案。
+
+- [ ] **步骤 3：先为权限和稳定导航写失败测试**
+
+tests/unit/permissions.test.ts 断言：
+
+- `3.cn` 请求 `https://3.cn/*` 与 `https://*.jd.com/*`。
+- `e.tb.cn` 请求 `https://e.tb.cn/*`、`https://*.taobao.com/*`、`https://*.tmall.com/*`。
+- 正式商品页继续只申请平台所需权限。
+
+tests/unit/tab-settle.test.ts 使用假的标签页更新事件覆盖：首次 complete 后继续跳转、最后一次 URL 更新后安静窗口完成、超时、标签页关闭和跨平台目标拒绝。
+
+- [ ] **步骤 4：实现短链权限与导航稳定等待器**
+
+`getProductPermissionOrigins` 返回去重后的固定白名单，不接受输入文本拼接任意 match pattern。`waitForTabSettled` 监听 tab 更新；只有 `status === 'complete'` 且 URL 在 800 ms 安静窗口内未变化才完成，并在所有出口移除监听器和定时器。
+
+短链临时标签页稳定后验证目标：
+
+- `3.cn` 只能进入 `jd.com` 子域。
+- `e.tb.cn` 只能进入 `taobao.com` 或 `tmall.com` 子域。
+- URL 或 DOM 指向登录、验证码、风险验证页面时失败。
+- 超时和失败都关闭后台创建的临时标签页；用户原本打开的页面不得关闭。
+
+- [ ] **步骤 5：先为错误页和标题后备写失败测试**
+
+tests/unit/parsers.test.ts 增加固定 HTML 字符串，覆盖 `HTTP Status 400 – Bad Request`、403、404、500、“页面不存在”“访问出错”“系统繁忙”。断言提取响应失败且错误标题不进入候选。
+
+再覆盖：最终 URL 为京东 `/product/<id>.html` 或淘宝 `/item.htm`、页面没有标题但传入 `hintedTitle` 时才使用提示标题并产生核对警告；普通页、登录页、错误页或跨平台页不得使用后备标题，价格和图片始终保持缺失。
+
+- [ ] **步骤 6：实现可判别提取结果和安全标题后备**
+
+在解析候选前调用 `detectProductPageError`。product-extractor 返回：
+
+```ts
+type ProductExtractionResponse =
+  { ok: true; product: ParsedProduct } | { ok: false; error: { message: string; code?: string } };
+```
+
+后台收到失败结构时记录脱敏错误并保持现有草稿不变。只有最终 URL 属于对应平台商品路由、未命中错误或验证页且解析结果标题为空时，才将 `hintedTitle` 写入草稿并追加“标题来自分享文案，请核对”。真实页面标题始终优先。
+
+- [ ] **步骤 7：保存提交短链与最终规范 URL**
+
+成功草稿设置：
+
+```ts
+{
+  submittedUrl: request.submittedUrl,
+  canonicalUrl: settledTab.url,
+}
+```
+
+解析、AI 和填表日志快照同步保留 `sourceUrl` 与 `canonicalUrl`；递归脱敏规则同时处理两个字段。旧草稿和旧日志没有 `submittedUrl`/`canonicalUrl` 时继续兼容。
+
+- [ ] **步骤 8：运行短链相关单元测试和类型检查**
+
+```bash
+pnpm vitest run tests/unit/product-input.test.ts tests/unit/tab-settle.test.ts tests/unit/permissions.test.ts tests/unit/messages.test.ts tests/unit/parsers.test.ts tests/unit/background-tabs.test.ts tests/unit/storage.test.ts tests/unit/operation-log.test.ts
+pnpm typecheck
+```
+
+预期：两类分享文案、短链权限、稳定跳转、错误页拒绝和双 URL 快照全部通过；测试不访问真实短链。
+
+- [ ] **步骤 9：提交任务 9**
+
+```bash
+git add src/background/product-input.ts src/background/tab-settle.ts src/background/permissions.ts src/background/tabs.ts src/background/handlers.ts src/domain/product.ts src/domain/messages.ts src/sidepanel/services.ts src/parsers/common.ts src/parsers/generic.ts entrypoints/product-extractor.ts tests/unit/product-input.test.ts tests/unit/tab-settle.test.ts tests/unit/permissions.test.ts tests/unit/messages.test.ts tests/unit/parsers.test.ts tests/unit/background-tabs.test.ts tests/unit/storage.test.ts tests/unit/operation-log.test.ts
+git commit -m "feat: 解析淘宝京东分享短链"
+```
+
+---
+
+### Task 10：完成端到端回归、中文文档和构建验收
 
 **文件：**
 
@@ -1425,6 +1555,7 @@ fixtures-server 的 Chat Completions 响应延迟 150 ms，使加载态断言可
 - setInputFiles 一次上传两张图片和一个小 MP4，预览对话框可打开关闭，重开侧边栏后 IndexedDB 媒体仍可读取。
 - 点击登录刷新按钮后从 logged-out 更新为 logged-in。
 - 完成解析和 AI 后进入运行记录，外层显示“AI 整理后的测试商品”，展开后显示来源 URL、标题和描述。
+- 用本地夹具模拟 `3.cn` 与 `e.tb.cn` 多段跳转，分别输入完整京东、淘宝分享文案；断言最终规范 URL、分享标题后备警告和错误页拒绝，不访问真实短链。
 - 填表后闲鱼图片输入和视频输入均有 File，发布点击计数为 0。
 - 通过不含视频 input 的闲鱼夹具执行一次填表，文本和图片仍成功，侧边栏显示“请在闲鱼页面手动上传视频”。
 
@@ -1436,7 +1567,7 @@ fixtures-server 的 Chat Completions 响应延迟 150 ms，使加载态断言可
 pnpm test:e2e
 ```
 
-预期：若前八个任务完整实现，测试通过；若失败，只修复首个与新验收相关的真实失败点，不通过放宽断言掩盖问题。
+预期：若前九个任务完整实现，测试通过；若失败，只修复首个与新验收相关的真实失败点，不通过放宽断言掩盖问题。
 
 - [ ] **步骤 3：更新中文 README 和本地验证文档**
 
@@ -1449,6 +1580,7 @@ README.md 更新：
 - 返回选择方式会清除当前草稿及本地媒体。
 - 运行记录标题和详情。
 - 视频控件不兼容时需要手动上传。
+- 淘宝、京东完整分享文案和短链解析、错误页保护及双 URL 记录。
 
 docs/本地安装与验证.md 增加逐项人工验证步骤，并删除“AI 预览/应用”旧说明。继续明确 pnpm build 的 CRX 和 ZIP 产物、pnpm dev 的实时目录以及真实闲鱼最终发布必须由用户点击。
 
@@ -1486,11 +1618,11 @@ xxd -l 16 dist/xianyu-assistant-0.1.0-chrome.crx
 - 发布边界搜索只允许说明文本、测试断言和“不得发布”约束，不允许最终发布动作。
 - CRX 文件头以 4372 3234 开始。
 
-- [ ] **步骤 6：提交任务 9**
+- [ ] **步骤 6：提交任务 10**
 
 ```bash
 git add tests/e2e/extension.spec.ts tests/e2e/fixtures-server.ts README.md docs/本地安装与验证.md tests/unit/build-artifacts.test.ts
-git commit -m "test: 验证媒体与运行记录完整链路"
+git commit -m "test: 验证商品整理完整链路"
 ```
 
 - [ ] **步骤 7：最终提交审计并推送 main**
