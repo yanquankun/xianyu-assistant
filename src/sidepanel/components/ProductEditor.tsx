@@ -1,3 +1,5 @@
+import type { Ref } from 'react';
+
 import type { ImageLoadStatus, ProductDraft } from '../../domain/product';
 import type { StoredMediaAsset } from '../../storage/media-store';
 import { MediaPicker } from './MediaPicker';
@@ -13,6 +15,7 @@ interface ProductEditorProps {
   onRemoveImage: (id: string) => void;
   onRemoveVideo: () => void;
   onReturnToStart: () => void;
+  returnToStartButtonRef: Ref<HTMLButtonElement>;
 }
 
 const PLATFORM_LABELS: Record<ProductDraft['platform'], string> = {
@@ -31,7 +34,8 @@ export function ProductEditor({
   onUploadVideo,
   onRemoveImage,
   onRemoveVideo,
-  onReturnToStart
+  onReturnToStart,
+  returnToStartButtonRef
 }: ProductEditorProps) {
   const update = (changes: Partial<ProductDraft>) => {
     onChange({ ...draft, ...changes, updatedAt: new Date().toISOString() });
@@ -58,7 +62,12 @@ export function ProductEditor({
           <h2>编辑发布内容</h2>
         </div>
         <div className="editor-heading-actions">
-          <button className="button button--quiet" type="button" onClick={onReturnToStart}>
+          <button
+            ref={returnToStartButtonRef}
+            className="button button--quiet"
+            type="button"
+            onClick={onReturnToStart}
+          >
             返回选择方式
           </button>
           <span className="step-number">02</span>

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import type { ParsedProduct, ProductDraft } from '../../src/domain/product';
+import type { StoredMediaMetadata } from '../../src/storage/media-store';
 import type { XianyuLoginCheckResult } from '../../src/xianyu/login';
 import type { FillResult } from '../../src/xianyu/fill';
 import { App, type SidePanelServices } from '../../src/sidepanel/App';
@@ -292,6 +293,38 @@ describe('App', () => {
     await waitFor(() => expect(calls).toEqual(['save', 'clear']));
   });
 
+  it('重置开始后不恢复迟到初始化读取的旧草稿', async () => {
+    const oldDraft = { ...readyDraft, id: 'old-draft', title: '不应恢复的旧草稿' };
+    const storedDraft = createDeferred<ProductDraft | null>();
+    const savedTitles: string[] = [];
+    let cleanupCalls = 0;
+    render(
+      <App
+        services={createServices({
+          loadDraft: () => storedDraft.promise,
+          saveDraft: (draft) => {
+            savedTitles.push(draft.title);
+            return Promise.resolve();
+          },
+          cleanupMedia: () => {
+            cleanupCalls += 1;
+            return Promise.resolve();
+          }
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '手动填写' }));
+    await waitFor(() => expect(savedTitles).toContain(''));
+    fireEvent.click(screen.getByRole('button', { name: '返回选择方式' }));
+    expect(await screen.findByRole('button', { name: '手动填写' })).toBeVisible();
+
+    storedDraft.resolve(oldDraft);
+    await waitFor(() => expect(cleanupCalls).toBeGreaterThan(0));
+    expect(screen.queryByDisplayValue('不应恢复的旧草稿')).toBeNull();
+    expect(savedTitles).not.toContain('不应恢复的旧草稿');
+  });
+
   it('非空草稿取消返回确认后保留编辑内容', async () => {
     render(<App services={createServices()} />);
 
@@ -303,6 +336,98 @@ describe('App', () => {
     expect(screen.getByRole('dialog', { name: '返回选择方式' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
     expect(screen.getByDisplayValue('不能误删的标题')).toBeVisible();
+  });
+
+  it('关闭确认后将焦点恢复到返回选择方式', async () => {
+    render(<App services={createServices()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '手动填写' }));
+    fireEvent.change(await screen.findByLabelText('商品标题'), { target: { value: '需要确认' } });
+    fireEvent.click(screen.getByRole('button', { name: '返回选择方式' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+    expect(screen.getByRole('button', { name: '返回选择方式' })).toHaveFocus();
+  });
+
+  it('确认框打开时隔离背景并让 Tab 焦点停留在确认操作内', async () => {
+    render(<App services={createServices()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '手动填写' }));
+    fireEvent.change(await screen.findByLabelText('商品标题'), { target: { value: '需要确认' } });
+    const title = screen.getByLabelText('商品标题');
+    fireEvent.click(screen.getByRole('button', { name: '返回选择方式' }));
+
+    expect(title.closest('[inert]')).not.toBeNull();
+    const cancel = screen.getByRole('button', { name: '取消' });
+    const confirm = screen.getByRole('button', { name: '确认返回' });
+    fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true });
+    expect(confirm).toHaveFocus();
+    fireEvent.keyDown(confirm, { key: 'Tab' });
+    expect(cancel).toHaveFocus();
+    expect(title).not.toHaveFocus();
+  });
+
+  it('确认打开后草稿被程序化更新时拒绝删除新版本', async () => {
+    let cleared = 0;
+    render(
+      <App
+        services={createServices({
+          clearDraft: () => {
+            cleared += 1;
+            return Promise.resolve();
+          }
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '手动填写' }));
+    const title = await screen.findByLabelText('商品标题');
+    fireEvent.change(title, { target: { value: '确认时的标题' } });
+    fireEvent.click(screen.getByRole('button', { name: '返回选择方式' }));
+    fireEvent.change(title, { target: { value: '确认后更新的标题' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认返回' }));
+
+    expect(await screen.findByText('草稿已更新，请重新确认返回')).toBeVisible();
+    expect(cleared).toBe(0);
+    expect(screen.getByDisplayValue('确认后更新的标题')).toBeVisible();
+    expect(screen.queryByRole('dialog', { name: '返回选择方式' })).toBeNull();
+  });
+
+  it('确认打开后异步媒体写入时拒绝删除新版本', async () => {
+    const media = createDeferred<StoredMediaMetadata>();
+    let cleared = 0;
+    render(
+      <App
+        services={createServices({
+          saveMedia: () => media.promise,
+          clearDraft: () => {
+            cleared += 1;
+            return Promise.resolve();
+          }
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '手动填写' }));
+    fireEvent.change(await screen.findByLabelText('商品标题'), { target: { value: '需要确认' } });
+    fireEvent.change(screen.getByLabelText('上传商品图片'), {
+      target: { files: [new File(['image'], 'late.png', { type: 'image/png' })] }
+    });
+    fireEvent.click(screen.getByRole('button', { name: '返回选择方式' }));
+    media.resolve({
+      assetId: 'late-image',
+      kind: 'image',
+      fileName: 'late.png',
+      mimeType: 'image/png',
+      byteLength: 5,
+      createdAt: '2026-08-31T14:00:00.000Z'
+    });
+    expect(await screen.findByText('late.png')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: '确认返回' }));
+
+    expect(await screen.findByText('草稿已更新，请重新确认返回')).toBeVisible();
+    expect(cleared).toBe(0);
+    expect(screen.getByText('late.png')).toBeVisible();
   });
 
   it('草稿删除失败时保留编辑内容并显示清除错误', async () => {

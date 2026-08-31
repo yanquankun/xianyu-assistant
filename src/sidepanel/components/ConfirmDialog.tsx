@@ -20,6 +20,7 @@ export function ConfirmDialog({
   onConfirm
 }: ConfirmDialogProps) {
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const confirmButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     cancelButtonRef.current?.focus();
@@ -40,6 +41,23 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-labelledby="confirm-dialog-title"
         aria-describedby="confirm-dialog-description"
+        onKeyDown={(event) => {
+          if (event.key !== 'Tab') {
+            return;
+          }
+          const cancelButton = cancelButtonRef.current;
+          const confirmButton = confirmButtonRef.current;
+          if (cancelButton === null || confirmButton === null) {
+            return;
+          }
+          if (event.shiftKey && document.activeElement === cancelButton) {
+            event.preventDefault();
+            confirmButton.focus();
+          } else if (!event.shiftKey && document.activeElement === confirmButton) {
+            event.preventDefault();
+            cancelButton.focus();
+          }
+        }}
       >
         <h2 id="confirm-dialog-title">{title}</h2>
         <p id="confirm-dialog-description">{description}</p>
@@ -54,6 +72,7 @@ export function ConfirmDialog({
             {cancelLabel}
           </button>
           <button
+            ref={confirmButtonRef}
             className="button button--primary"
             type="button"
             disabled={isConfirming}

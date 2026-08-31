@@ -70,6 +70,11 @@ const NAVIGATION: { id: PanelView; label: string }[] = [
   { id: 'logs', label: '运行记录' }
 ];
 
+interface ResetConfirmation {
+  draftId: string;
+  draftUpdatedAt: string;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '操作失败，请重试';
 }
@@ -88,13 +93,16 @@ export function App({ services }: { services: SidePanelServices }) {
   const [isLoginRefreshing, setIsLoginRefreshing] = useState(false);
   const [logs, setLogs] = useState<OperationLogEntry[]>([]);
   const [panelSide, setPanelSide] = useState<PanelSide>('unknown');
-  const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
+  const [resetConfirmation, setResetConfirmation] = useState<ResetConfirmation | null>(null);
   const [isResetting, setIsResetting] = useState(false);
   const draftSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const latestDraftRef = useRef<ProductDraft | null>(null);
   const sourceInputRef = useRef<HTMLInputElement>(null);
+  const returnToStartButtonRef = useRef<HTMLButtonElement>(null);
   const focusSourceAfterResetRef = useRef(false);
+  const focusReturnAfterDialogRef = useRef(false);
   const workflowGenerationRef = useRef(0);
+  const initializationGenerationRef = useRef(0);
   const imageUploadRequestRef = useRef(0);
   const videoUploadRequestRef = useRef(0);
   const loginCheckRequestRef = useRef(0);
@@ -132,6 +140,13 @@ export function App({ services }: { services: SidePanelServices }) {
   }, [state.draft]);
 
   useEffect(() => {
+    if (resetConfirmation === null && focusReturnAfterDialogRef.current) {
+      focusReturnAfterDialogRef.current = false;
+      returnToStartButtonRef.current?.focus();
+    }
+  }, [resetConfirmation]);
+
+  useEffect(() => {
     if (state.draft === null && focusSourceAfterResetRef.current) {
       focusSourceAfterResetRef.current = false;
       sourceInputRef.current?.focus();
@@ -140,6 +155,10 @@ export function App({ services }: { services: SidePanelServices }) {
 
   useEffect(() => {
     let active = true;
+    const initializationToken = initializationGenerationRef.current + 1;
+    initializationGenerationRef.current = initializationToken;
+    const isCurrentInitialization = () =>
+      active && initializationGenerationRef.current === initializationToken;
     const initialize = async () => {
       void checkXianyuLogin(false);
       const [storedSettings, storedDraft, side, entries] = await Promise.all([
@@ -148,8 +167,11 @@ export function App({ services }: { services: SidePanelServices }) {
         services.getPanelSide(),
         services.loadLogs()
       ]);
+      if (!isCurrentInitialization()) {
+        return;
+      }
       await services.cleanupMedia(storedDraft === null ? [] : getLocalAssetIds(storedDraft));
-      if (!active) {
+      if (!isCurrentInitialization()) {
         return;
       }
       if (storedSettings !== null) {
@@ -162,7 +184,7 @@ export function App({ services }: { services: SidePanelServices }) {
       setLogs(entries);
     };
     void initialize().catch((error: unknown) => {
-      if (active) {
+      if (isCurrentInitialization()) {
         dispatch({ type: 'OPERATION_FAILED', message: errorMessage(error) });
       }
     });
@@ -330,15 +352,41 @@ export function App({ services }: { services: SidePanelServices }) {
     dispatch({ type: 'DRAFT_RESTORED', draft });
   };
 
-  const resetWorkflow = async () => {
+  const isResetConfirmationCurrent = (confirmation: ResetConfirmation): boolean => {
+    const draft = latestDraftRef.current;
+    return (
+      draft?.id === confirmation.draftId && draft.updatedAt === confirmation.draftUpdatedAt
+    );
+  };
+
+  const closeResetConfirmation = () => {
+    focusReturnAfterDialogRef.current = true;
+    setResetConfirmation(null);
+  };
+
+  const rejectStaleResetConfirmation = () => {
+    closeResetConfirmation();
+    dispatch({ type: 'OPERATION_FAILED', message: '草稿已更新，请重新确认返回' });
+  };
+
+  const resetWorkflow = async (confirmation?: ResetConfirmation) => {
+    if (confirmation !== undefined && !isResetConfirmationCurrent(confirmation)) {
+      rejectStaleResetConfirmation();
+      return;
+    }
     const draft = latestDraftRef.current;
     if (draft === null || isResetting) {
       return;
     }
     const localAssetIds = getLocalAssetIds(draft);
+    initializationGenerationRef.current += 1;
     setIsResetting(true);
     try {
       await draftSaveQueue.current;
+      if (confirmation !== undefined && !isResetConfirmationCurrent(confirmation)) {
+        rejectStaleResetConfirmation();
+        return;
+      }
       await services.clearDraft();
       workflowGenerationRef.current += 1;
       imageUploadRequestRef.current += 1;
@@ -346,7 +394,7 @@ export function App({ services }: { services: SidePanelServices }) {
       loginCheckRequestRef.current += 1;
       focusSourceAfterResetRef.current = true;
       dispatch({ type: 'WORKFLOW_RESET' });
-      setIsResetDialogOpen(false);
+      setResetConfirmation(null);
       for (const assetId of localAssetIds) {
         try {
           await services.deleteMedia(assetId);
@@ -361,7 +409,7 @@ export function App({ services }: { services: SidePanelServices }) {
         // A future bounded cleanup retries orphaned media without restoring the deleted draft.
       }
     } catch (error) {
-      setIsResetDialogOpen(false);
+      setResetConfirmation(null);
       dispatch({ type: 'OPERATION_FAILED', message: `草稿清除失败：${errorMessage(error)}` });
     } finally {
       setIsResetting(false);
@@ -374,7 +422,7 @@ export function App({ services }: { services: SidePanelServices }) {
       return;
     }
     if (draftNeedsResetConfirmation(draft)) {
-      setIsResetDialogOpen(true);
+      setResetConfirmation({ draftId: draft.id, draftUpdatedAt: draft.updatedAt });
       return;
     }
     void resetWorkflow();
@@ -554,6 +602,7 @@ export function App({ services }: { services: SidePanelServices }) {
 
   return (
     <div className="app-shell">
+      <div inert={resetConfirmation !== null}>
       <header className="app-header">
         <div className="brand-mark" aria-hidden="true">
           闲
@@ -657,6 +706,7 @@ export function App({ services }: { services: SidePanelServices }) {
                 onRemoveImage={(id) => void removeImage(id)}
                 onRemoveVideo={() => void removeVideo()}
                 onReturnToStart={returnToStart}
+                returnToStartButtonRef={returnToStartButtonRef}
               />
             )}
 
@@ -675,18 +725,6 @@ export function App({ services }: { services: SidePanelServices }) {
 
         {state.activeView === 'logs' ? <OperationLog entries={logs} /> : null}
       </main>
-
-      {isResetDialogOpen ? (
-        <ConfirmDialog
-          title="返回选择方式"
-          description="当前草稿和本地上传的媒体将被删除，运行记录和 AI 配置会保留。"
-          cancelLabel="取消"
-          confirmLabel="确认返回"
-          isConfirming={isResetting}
-          onCancel={() => setIsResetDialogOpen(false)}
-          onConfirm={() => void resetWorkflow()}
-        />
-      ) : null}
 
       <footer className="action-dock">
         <p>最终发布需在闲鱼页面手动完成</p>
@@ -713,6 +751,19 @@ export function App({ services }: { services: SidePanelServices }) {
           </button>
         </div>
       </footer>
+      </div>
+
+      {resetConfirmation === null ? null : (
+        <ConfirmDialog
+          title="返回选择方式"
+          description="当前草稿和本地上传的媒体将被删除，运行记录和 AI 配置会保留。"
+          cancelLabel="取消"
+          confirmLabel="确认返回"
+          isConfirming={isResetting}
+          onCancel={closeResetConfirmation}
+          onConfirm={() => void resetWorkflow(resetConfirmation)}
+        />
+      )}
     </div>
   );
 }
