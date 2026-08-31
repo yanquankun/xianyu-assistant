@@ -25,7 +25,13 @@ export interface MediaStore {
   cleanupExcept(referencedAssetIds: ReadonlySet<string>): Promise<void>;
 }
 
-type TransactionOperation<T> = (store: IDBObjectStore, complete: (value: T) => void) => void;
+type RequestRegistrar = <T>(request: IDBRequest<T>, onSuccess: (value: T) => void) => void;
+
+type TransactionOperation<T> = (
+  store: IDBObjectStore,
+  complete: (value: T) => void,
+  registerRequest: RequestRegistrar
+) => void;
 
 function createStorageError(message: '本地媒体保存失败' | '本地媒体读取失败'): Error {
   return new Error(message);
@@ -74,18 +80,38 @@ function runTransaction<T>(
     let value: T | undefined;
     let hasValue = false;
     let failed = false;
+    let settled = false;
 
-    const rejectAfterAbort = () => reject(createStorageError(message));
-
-    transaction.onabort = rejectAfterAbort;
-    transaction.onerror = () => {
-      failed = true;
-    };
-    transaction.oncomplete = () => {
-      if (failed || !hasValue) {
-        reject(createStorageError(message));
+    const rejectSafely = () => {
+      if (settled) {
         return;
       }
+      settled = true;
+      reject(createStorageError(message));
+    };
+
+    const abortTransaction = () => {
+      failed = true;
+      try {
+        transaction.abort();
+      } catch {
+        rejectSafely();
+      }
+    };
+
+    const registerRequest: RequestRegistrar = (request, onSuccess) => {
+      request.onsuccess = () => onSuccess(request.result);
+      request.onerror = abortTransaction;
+    };
+
+    transaction.onabort = rejectSafely;
+    transaction.onerror = abortTransaction;
+    transaction.oncomplete = () => {
+      if (failed || !hasValue) {
+        rejectSafely();
+        return;
+      }
+      settled = true;
       resolve(value as T);
     };
 
@@ -93,17 +119,46 @@ function runTransaction<T>(
       operation(transaction.objectStore(ASSETS_STORE_NAME), (result) => {
         value = result;
         hasValue = true;
-      });
+      }, registerRequest);
     } catch {
-      failed = true;
-      try {
-        transaction.abort();
-      } catch {
-        reject(createStorageError(message));
-      }
+      abortTransaction();
     }
 
   });
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isValidCreatedAt(value: unknown): value is string {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+function isBlob(value: unknown): value is Blob {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const blob = value as {
+    arrayBuffer?: unknown;
+    size?: unknown;
+    slice?: unknown;
+    stream?: unknown;
+    text?: unknown;
+    type?: unknown;
+  };
+  const tag = Object.prototype.toString.call(value);
+  return (
+    (tag === '[object Blob]' || tag === '[object File]') &&
+    typeof blob.size === 'number' &&
+    Number.isFinite(blob.size) &&
+    blob.size >= 0 &&
+    typeof blob.type === 'string' &&
+    typeof blob.arrayBuffer === 'function' &&
+    typeof blob.slice === 'function' &&
+    typeof blob.stream === 'function' &&
+    typeof blob.text === 'function'
+  );
 }
 
 function isStoredMediaAsset(value: unknown): value is StoredMediaAsset {
@@ -111,15 +166,18 @@ function isStoredMediaAsset(value: unknown): value is StoredMediaAsset {
     return false;
   }
   const record = value as Record<string, unknown>;
+  const blob = record.blob;
   return (
-    typeof record.assetId === 'string' &&
+    isNonEmptyString(record.assetId) &&
     (record.kind === 'image' || record.kind === 'video') &&
-    typeof record.fileName === 'string' &&
-    typeof record.mimeType === 'string' &&
+    isNonEmptyString(record.fileName) &&
+    isNonEmptyString(record.mimeType) &&
     typeof record.byteLength === 'number' &&
-    typeof record.createdAt === 'string' &&
-    typeof record.blob === 'object' &&
-    record.blob !== null
+    Number.isFinite(record.byteLength) &&
+    record.byteLength >= 0 &&
+    isValidCreatedAt(record.createdAt) &&
+    isBlob(blob) &&
+    record.byteLength === blob.size
   );
 }
 
@@ -152,29 +210,29 @@ export function createMediaStore(
       const asset: StoredMediaAsset = { ...metadata, blob: file };
 
       return withDatabase('本地媒体保存失败', (database) =>
-        runTransaction(database, 'readwrite', '本地媒体保存失败', (store, complete) => {
+        runTransaction(database, 'readwrite', '本地媒体保存失败', (store, complete, registerRequest) => {
           const request = store.add(asset);
-          request.onsuccess = () => complete(metadata);
+          registerRequest(request, () => complete(metadata));
         })
       );
     },
 
     async get(assetId: string): Promise<StoredMediaAsset | null> {
       return withDatabase('本地媒体读取失败', (database) =>
-        runTransaction(database, 'readonly', '本地媒体读取失败', (store, complete) => {
+        runTransaction(database, 'readonly', '本地媒体读取失败', (store, complete, registerRequest) => {
           const request = store.get(assetId);
-          request.onsuccess = () => {
-            complete(isStoredMediaAsset(request.result) ? request.result : null);
-          };
+          registerRequest(request, (result) => {
+            complete(isStoredMediaAsset(result) ? result : null);
+          });
         })
       );
     },
 
     async delete(assetId: string): Promise<void> {
       await withDatabase('本地媒体保存失败', (database) =>
-        runTransaction(database, 'readwrite', '本地媒体保存失败', (store, complete) => {
+        runTransaction(database, 'readwrite', '本地媒体保存失败', (store, complete, registerRequest) => {
           const request = store.delete(assetId);
-          request.onsuccess = () => complete(undefined);
+          registerRequest(request, () => complete(undefined));
         })
       );
     },
@@ -184,16 +242,16 @@ export function createMediaStore(
         return;
       }
       await withDatabase('本地媒体保存失败', (database) =>
-        runTransaction(database, 'readwrite', '本地媒体保存失败', (store, complete) => {
+        runTransaction(database, 'readwrite', '本地媒体保存失败', (store, complete, registerRequest) => {
           let remaining = assetIds.length;
           for (const assetId of assetIds) {
             const request = store.delete(assetId);
-            request.onsuccess = () => {
+            registerRequest(request, () => {
               remaining -= 1;
               if (remaining === 0) {
                 complete(undefined);
               }
-            };
+            });
           }
         })
       );
@@ -201,10 +259,9 @@ export function createMediaStore(
 
     async cleanupExcept(referencedAssetIds: ReadonlySet<string>): Promise<void> {
       await withDatabase('本地媒体保存失败', (database) =>
-        runTransaction(database, 'readwrite', '本地媒体保存失败', (store, complete) => {
+        runTransaction(database, 'readwrite', '本地媒体保存失败', (store, complete, registerRequest) => {
           const request = store.openCursor();
-          request.onsuccess = () => {
-            const cursor = request.result;
+          registerRequest(request, (cursor) => {
             if (cursor === null) {
               complete(undefined);
               return;
@@ -215,8 +272,8 @@ export function createMediaStore(
               return;
             }
             const deleteRequest = cursor.delete();
-            deleteRequest.onsuccess = () => cursor.continue();
-          };
+            registerRequest(deleteRequest, () => cursor.continue());
+          });
         })
       );
     }
