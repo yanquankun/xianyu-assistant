@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 
 import type { AiConnectionResult } from '../ai/client';
 import type { ExpansionPreview as ExpansionPreviewValue } from '../ai/validation';
@@ -17,7 +17,10 @@ import type {
 } from '../storage/media-store';
 import type { OperationLogEntry } from '../storage/operation-log';
 import type { FillResult } from '../xianyu/fill';
-import type { XianyuLoginCheckResult } from '../xianyu/login';
+import {
+  parseXianyuLoginCheckResult,
+  type XianyuLoginCheckResult
+} from '../xianyu/login';
 import { AiSettingsForm } from './components/AiSettingsForm';
 import { LoginBanner } from './components/LoginBanner';
 import { OperationLog } from './components/OperationLog';
@@ -81,7 +84,35 @@ export function App({ services }: { services: SidePanelServices }) {
   const latestDraftRef = useRef<ProductDraft | null>(null);
   const imageUploadRequestRef = useRef(0);
   const videoUploadRequestRef = useRef(0);
+  const loginCheckRequestRef = useRef(0);
   const pendingMediaAssetIdsRef = useRef(new Set<string>());
+
+  const checkXianyuLogin = useCallback(async (isRefreshRequest: boolean): Promise<void> => {
+    const requestToken = loginCheckRequestRef.current + 1;
+    loginCheckRequestRef.current = requestToken;
+    setIsLoginRefreshing(isRefreshRequest);
+    try {
+      const result = parseXianyuLoginCheckResult(await services.checkXianyuLogin());
+      if (result === null) {
+        throw new Error('扩展后台返回了无法识别的登录状态');
+      }
+      if (loginCheckRequestRef.current !== requestToken) {
+        return;
+      }
+      dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: result.state });
+      setLoginMessage(result.message);
+    } catch (error) {
+      if (loginCheckRequestRef.current !== requestToken) {
+        return;
+      }
+      dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: 'unknown' });
+      setLoginMessage(`检查闲鱼登录状态失败：${errorMessage(error)}`);
+    } finally {
+      if (loginCheckRequestRef.current === requestToken) {
+        setIsLoginRefreshing(false);
+      }
+    }
+  }, [services]);
 
   useEffect(() => {
     latestDraftRef.current = state.draft;
@@ -90,10 +121,10 @@ export function App({ services }: { services: SidePanelServices }) {
   useEffect(() => {
     let active = true;
     const initialize = async () => {
-      const [storedSettings, storedDraft, loginResult, side, entries] = await Promise.all([
+      void checkXianyuLogin(false);
+      const [storedSettings, storedDraft, side, entries] = await Promise.all([
         services.loadSettings(),
         services.loadDraft(),
-        services.checkXianyuLogin(),
         services.getPanelSide(),
         services.loadLogs()
       ]);
@@ -107,8 +138,6 @@ export function App({ services }: { services: SidePanelServices }) {
       if (storedDraft !== null) {
         dispatch({ type: 'DRAFT_RESTORED', draft: storedDraft });
       }
-      dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: loginResult.state });
-      setLoginMessage(loginResult.message);
       setPanelSide(side);
       setLogs(entries);
     };
@@ -119,8 +148,9 @@ export function App({ services }: { services: SidePanelServices }) {
     });
     return () => {
       active = false;
+      loginCheckRequestRef.current += 1;
     };
-  }, [services]);
+  }, [checkXianyuLogin, services]);
 
   useEffect(() => {
     if (state.draft === null) {
@@ -225,27 +255,12 @@ export function App({ services }: { services: SidePanelServices }) {
       setLoginMessage('闲鱼已登录');
     } catch (error) {
       dispatch({ type: 'OPERATION_FAILED', message: errorMessage(error) });
-      const loginResult = await services.checkXianyuLogin().catch(() => ({
-        state: 'unknown' as const,
-        message: '检查闲鱼登录状态失败，请重试'
-      }));
-      dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: loginResult.state });
-      setLoginMessage(loginResult.message);
+      await checkXianyuLogin(false);
     }
   };
 
   const refreshXianyuLogin = async () => {
-    setIsLoginRefreshing(true);
-    try {
-      const result = await services.checkXianyuLogin();
-      dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: result.state });
-      setLoginMessage(result.message);
-    } catch (error) {
-      dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: 'unknown' });
-      setLoginMessage(`检查闲鱼登录状态失败：${errorMessage(error)}`);
-    } finally {
-      setIsLoginRefreshing(false);
-    }
+    await checkXianyuLogin(true);
   };
 
   const saveSettings = async () => {

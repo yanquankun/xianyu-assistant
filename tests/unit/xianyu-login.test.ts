@@ -3,7 +3,11 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { detectLoginState } from '../../src/xianyu/login';
+import {
+  detectLoginState,
+  parseXianyuLoginCheckResult,
+  parseXianyuLoginState
+} from '../../src/xianyu/login';
 
 function fixture(name: string): Document {
   const html = readFileSync(resolve(process.cwd(), 'tests', 'fixtures', name), 'utf8');
@@ -36,5 +40,19 @@ describe('detectLoginState', () => {
     expect(detectLoginState(fixture('xianyu-publish.html'), 'https://example.com/publish')).toBe(
       'unknown'
     );
+  });
+
+  it('只接受三个约定的内容脚本登录状态', () => {
+    expect(parseXianyuLoginState('logged-in')).toBe('logged-in');
+    expect(parseXianyuLoginState('unexpected')).toBeNull();
+    expect(parseXianyuLoginState({ state: 'logged-in' })).toBeNull();
+  });
+
+  it('拒绝状态非法、消息为空或超长的后台登录结果', () => {
+    expect(parseXianyuLoginCheckResult({ state: 'unexpected', message: '错误' })).toBeNull();
+    expect(parseXianyuLoginCheckResult({ state: 'logged-in', message: ' ' })).toBeNull();
+    expect(
+      parseXianyuLoginCheckResult({ state: 'logged-in', message: 'a'.repeat(301) })
+    ).toBeNull();
   });
 });

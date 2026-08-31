@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import type { ParsedProduct } from '../../src/domain/product';
+import type { ParsedProduct, ProductDraft } from '../../src/domain/product';
 import type { XianyuLoginCheckResult } from '../../src/xianyu/login';
 import { App, type SidePanelServices } from '../../src/sidepanel/App';
 
@@ -15,6 +15,34 @@ const parsedProduct: ParsedProduct = {
   images: [],
   warnings: [],
   confidence: 'high'
+};
+
+const readyDraft: ProductDraft = {
+  id: 'ready-draft',
+  platform: 'taobao',
+  canonicalUrl: 'https://item.taobao.com/item.htm?id=1',
+  source: { title: '测试商品', description: '测试描述', price: 99, currency: 'CNY' },
+  title: '测试商品',
+  description: '测试描述',
+  price: 99,
+  currency: 'CNY',
+  images: [
+    {
+      id: 'ready-image',
+      location: {
+        kind: 'remote',
+        url: 'https://img.example.com/ready.jpg',
+        extractedBy: 'dom'
+      },
+      selected: true,
+      loadStatus: 'loaded'
+    }
+  ],
+  warnings: [],
+  confidence: 'high',
+  shippingMethod: '包邮',
+  categoryNote: '',
+  updatedAt: '2026-08-31T12:00:00.000Z'
 };
 
 interface Deferred<T> {
@@ -91,6 +119,86 @@ describe('App', () => {
 
     expect(await screen.findByText('闲鱼已登录')).toBeVisible();
     expect(await screen.findByText('已重新检查')).toBeVisible();
+  });
+
+  it('初始化检查晚于手动刷新时不覆盖最新登录结论', async () => {
+    const initialCheck = createDeferred<XianyuLoginCheckResult>();
+    const manualRefresh = createDeferred<XianyuLoginCheckResult>();
+    const checks = [initialCheck, manualRefresh];
+    render(
+      <App
+        services={createServices({
+          checkXianyuLogin: () => {
+            const check = checks.shift();
+            if (check === undefined) {
+              return Promise.reject(new Error('测试调用过多'));
+            }
+            return check.promise;
+          }
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '刷新闲鱼登录状态' }));
+    manualRefresh.resolve({ state: 'logged-in', message: '手动刷新结果' });
+    expect(await screen.findByText('手动刷新结果')).toBeVisible();
+
+    initialCheck.resolve({ state: 'logged-out', message: '过期初始化结果' });
+    await waitFor(() => expect(screen.getByText('手动刷新结果')).toBeVisible());
+    expect(screen.getByText('闲鱼已登录')).toBeVisible();
+  });
+
+  it('填表失败后的旧复检不覆盖较新的手动刷新结果', async () => {
+    const failedFillCheck = createDeferred<XianyuLoginCheckResult>();
+    const manualRefresh = createDeferred<XianyuLoginCheckResult>();
+    let checkCalls = 0;
+    render(
+      <App
+        services={createServices({
+          loadDraft: () => Promise.resolve(readyDraft),
+          checkXianyuLogin: () => {
+            checkCalls += 1;
+            if (checkCalls === 1) {
+              return Promise.resolve({ state: 'logged-in', message: '初始化结果' });
+            }
+            if (checkCalls === 2) {
+              return failedFillCheck.promise;
+            }
+            if (checkCalls === 3) {
+              return manualRefresh.promise;
+            }
+            return Promise.reject(new Error('测试调用过多'));
+          },
+          fillDraft: () => Promise.reject(new Error('填写失败'))
+        })}
+      />
+    );
+
+    const fillButton = await screen.findByRole('button', { name: '填入闲鱼' });
+    fireEvent.load(screen.getByRole('img', { name: '商品图片 1' }));
+    await waitFor(() => expect(fillButton).toBeEnabled());
+    fireEvent.click(fillButton);
+    await waitFor(() => expect(checkCalls).toBe(2));
+
+    fireEvent.click(screen.getByRole('button', { name: '刷新闲鱼登录状态' }));
+    manualRefresh.resolve({ state: 'logged-in', message: '最新手动刷新结果' });
+    expect(await screen.findByText('最新手动刷新结果')).toBeVisible();
+
+    failedFillCheck.resolve({ state: 'logged-out', message: '过期复检结果' });
+    await waitFor(() => expect(screen.getByText('最新手动刷新结果')).toBeVisible());
+    expect(screen.getByText('闲鱼已登录')).toBeVisible();
+  });
+
+  it('后台返回非法登录结果时走未知状态失败分支', async () => {
+    const invalidResult: XianyuLoginCheckResult = { state: 'unknown', message: '初始测试结果' };
+    Reflect.set(invalidResult, 'state', 'unexpected');
+    const services = createServices({
+      checkXianyuLogin: () => Promise.resolve(invalidResult)
+    });
+    render(<App services={services} />);
+
+    expect(await screen.findByText('检查闲鱼登录状态失败：扩展后台返回了无法识别的登录状态')).toBeVisible();
+    expect(screen.getByText('尚未确认闲鱼登录状态')).toBeVisible();
   });
 
   it('未登录时显示提醒且禁用填表动作', async () => {

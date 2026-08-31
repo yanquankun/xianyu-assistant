@@ -9,7 +9,10 @@ import { createMediaStore } from '../storage/media-store';
 import { createLocalStore, type LocalStore, type StorageAreaLike } from '../storage/local-store';
 import type { OperationLogEntry, OperationStage } from '../storage/operation-log';
 import type { FillResult } from '../xianyu/fill';
-import type { XianyuLoginCheckResult } from '../xianyu/login';
+import {
+  parseXianyuLoginCheckResult,
+  type XianyuLoginCheckResult
+} from '../xianyu/login';
 import type { PanelSide, SidePanelServices } from './App';
 
 function storageArea(): StorageAreaLike {
@@ -157,8 +160,13 @@ export function createBrowserSidePanelServices(): SidePanelServices {
       return send<ExpansionPreview>({ type: 'EXPAND_DRAFT', settings, draft });
     },
 
-    checkXianyuLogin(): Promise<XianyuLoginCheckResult> {
-      return send<XianyuLoginCheckResult>({ type: 'CHECK_XIANYU_LOGIN' });
+    async checkXianyuLogin(): Promise<XianyuLoginCheckResult> {
+      const value = await send<unknown>({ type: 'CHECK_XIANYU_LOGIN' });
+      const result = parseXianyuLoginCheckResult(value);
+      if (result === null) {
+        throw new Error('扩展后台返回了无法识别的登录状态');
+      }
+      return result;
     },
 
     async fillDraft(draft: ProductDraft): Promise<FillResult> {

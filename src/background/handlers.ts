@@ -204,7 +204,7 @@ async function checkXianyuLogin(): Promise<XianyuLoginCheckResult> {
       return (await browser.tabs.query({ active: true, currentWindow: true })).at(0)?.id;
     },
     readLoginState: (tabId) =>
-      sendXianyuMessage<XianyuLoginState>(xianyuContentDependencies(), tabId, {
+      sendXianyuMessage<unknown>(xianyuContentDependencies(), tabId, {
         type: 'CHECK_XIANYU_LOGIN'
       })
   });

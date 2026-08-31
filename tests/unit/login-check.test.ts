@@ -58,6 +58,21 @@ describe('checkXianyuLoginFromTabs', () => {
       })
     );
 
-    expect(result).toEqual({ state: 'unknown', message: '检查闲鱼登录状态失败：内容脚本不可用' });
+    expect(result).toEqual({ state: 'unknown', message: '检查闲鱼登录状态失败，请重试' });
+  });
+
+  it('内容脚本返回非法登录状态时降级为中文失败提示', async () => {
+    const result = await checkXianyuLoginFromTabs(
+      dependencies({
+        listTabs: () =>
+          Promise.resolve([
+            { id: 1, url: 'https://www.goofish.com/publish', active: true, windowId: 1 }
+          ]),
+        getActiveTabId: () => Promise.resolve(1),
+        readLoginState: () => Promise.resolve('invalid-login-state')
+      })
+    );
+
+    expect(result).toEqual({ state: 'unknown', message: '检查闲鱼登录状态失败，请重试' });
   });
 });

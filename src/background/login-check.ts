@@ -1,10 +1,14 @@
 import { selectXianyuTab, type BrowserTab } from './tabs';
-import type { XianyuLoginCheckResult, XianyuLoginState } from '../xianyu/login';
+import {
+  parseXianyuLoginState,
+  type XianyuLoginCheckResult,
+  type XianyuLoginState
+} from '../xianyu/login';
 
 export interface LoginCheckDependencies {
   listTabs: () => Promise<BrowserTab[]>;
   getActiveTabId: () => Promise<number | undefined>;
-  readLoginState: (tabId: number) => Promise<XianyuLoginState>;
+  readLoginState: (tabId: number) => Promise<unknown>;
 }
 
 const NO_XIANYU_TAB: XianyuLoginCheckResult = {
@@ -22,11 +26,10 @@ function messageFor(state: XianyuLoginState): string {
   return '尚未确认闲鱼登录状态，请稍后重试';
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim().length > 0
-    ? `检查闲鱼登录状态失败：${error.message}`
-    : '检查闲鱼登录状态失败，请重试';
-}
+const LOGIN_CHECK_FAILED: XianyuLoginCheckResult = {
+  state: 'unknown',
+  message: '检查闲鱼登录状态失败，请重试'
+};
 
 export async function checkXianyuLoginFromTabs(
   dependencies: LoginCheckDependencies
@@ -40,9 +43,12 @@ export async function checkXianyuLoginFromTabs(
     if (selection === null) {
       return NO_XIANYU_TAB;
     }
-    const state = await dependencies.readLoginState(selection.tabId);
+    const state = parseXianyuLoginState(await dependencies.readLoginState(selection.tabId));
+    if (state === null) {
+      return LOGIN_CHECK_FAILED;
+    }
     return { state, message: messageFor(state) };
-  } catch (error) {
-    return { state: 'unknown', message: errorMessage(error) };
+  } catch {
+    return LOGIN_CHECK_FAILED;
   }
 }

@@ -5,6 +5,39 @@ export interface XianyuLoginCheckResult {
   message: string;
 }
 
+export const MAX_XIANYU_LOGIN_CHECK_MESSAGE_LENGTH = 300;
+
+export function parseXianyuLoginState(value: unknown): XianyuLoginState | null {
+  return value === 'logged-in' || value === 'logged-out' || value === 'unknown' ? value : null;
+}
+
+function isSafeLoginMessage(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.trim().length > 0 &&
+    value.length <= MAX_XIANYU_LOGIN_CHECK_MESSAGE_LENGTH &&
+    !hasControlCharacter(value)
+  );
+}
+
+function hasControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
+  });
+}
+
+export function parseXianyuLoginCheckResult(value: unknown): XianyuLoginCheckResult | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const state = parseXianyuLoginState(record.state);
+  return state !== null && isSafeLoginMessage(record.message)
+    ? { state, message: record.message }
+    : null;
+}
+
 function isXianyuUrl(value: string): boolean {
   try {
     return new URL(value).hostname.toLowerCase() === 'www.goofish.com';
