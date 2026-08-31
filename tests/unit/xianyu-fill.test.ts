@@ -4,11 +4,14 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ProductImage } from '../../src/domain/product';
+import type { MediaStore } from '../../src/storage/media-store';
 import {
   downloadSelectedImages,
   fillXianyuDraft,
   isXianyuFillPayload,
   parseXianyuFillResult,
+  prepareSelectedImages,
+  type ImageFetchLike,
   type XianyuFillPayload
 } from '../../src/xianyu/fill';
 
@@ -47,6 +50,20 @@ describe('fillXianyuDraft', () => {
         images: new Array(10).fill(validPayload.images[0])
       })
     ).toBe(false);
+    expect(isXianyuFillPayload({ ...validPayload, videoDataBase64: '整文件视频' })).toBe(false);
+    expect(
+      isXianyuFillPayload({
+        ...validPayload,
+        videoTransfer: {
+          sessionId: 'session-1',
+          fileName: 'demo.mp4',
+          mimeType: 'video/mp4',
+          byteLength: 5,
+          chunkBytes: 512 * 1024,
+          dataBase64: '禁止放入 descriptor'
+        }
+      })
+    ).toBe(false);
   });
 
   it('填写标题、价格、描述和图片后不触发发布按钮', async () => {
@@ -74,6 +91,65 @@ describe('fillXianyuDraft', () => {
     );
     expect(document.querySelector<HTMLInputElement>('input[name="images"]')?.files).toHaveLength(1);
     expect(clicked).toBe(false);
+  });
+
+  it('图片与视频使用不同文件输入框且不触发发布', async () => {
+    const document = publishDocument();
+    const publish = document.querySelector<HTMLButtonElement>('[data-testid="publish"]');
+    if (publish === null) {
+      throw new Error('测试夹具需要发布按钮');
+    }
+    let publishClicked = false;
+    publish.addEventListener('click', () => {
+      publishClicked = true;
+    });
+    const videoFile = new File(['video'], 'demo.mp4', { type: 'video/mp4' });
+
+    const result = await fillXianyuDraft(document, validPayload, videoFile);
+
+    expect(document.querySelector<HTMLInputElement>('input[name="images"]')?.files).toHaveLength(1);
+    expect(document.querySelector<HTMLInputElement>('input[name="video"]')?.files?.[0]?.name).toBe(
+      'demo.mp4'
+    );
+    expect(result.filled).toContain('video');
+    expect(publishClicked).toBe(false);
+  });
+
+  it('找不到可靠视频控件时保留文本与图片结果并提示手动上传', async () => {
+    const document = publishDocument();
+    document.querySelector('input[name="video"]')?.remove();
+
+    const result = await fillXianyuDraft(
+      document,
+      validPayload,
+      new File(['video'], 'demo.mp4', { type: 'video/mp4' })
+    );
+
+    expect(result.filled).toEqual(
+      expect.arrayContaining(['title', 'price', 'description', 'images'])
+    );
+    expect(result.skipped).toContainEqual({
+      field: 'video',
+      reason: '未找到可靠的视频上传字段，请在闲鱼页面手动上传视频'
+    });
+  });
+
+  it('可访问标签能可靠区分没有 name 和 accept 的图片与视频控件', async () => {
+    const document = new DOMParser().parseFromString(
+      '<!doctype html><html><body><label>图片<input type="file" multiple></label><label>视频<input type="file"></label></body></html>',
+      'text/html'
+    );
+
+    const result = await fillXianyuDraft(
+      document,
+      validPayload,
+      new File(['video'], 'demo.mov', { type: 'video/quicktime' })
+    );
+
+    const inputs = document.querySelectorAll<HTMLInputElement>('input[type="file"]');
+    expect(inputs[0]?.files?.[0]?.name).toBe('image-1.png');
+    expect(inputs[1]?.files?.[0]?.name).toBe('demo.mov');
+    expect(result.filled).toEqual(expect.arrayContaining(['images', 'video']));
   });
 
   it('严格校验闲鱼内容脚本返回的成功与失败响应', () => {
@@ -295,6 +371,35 @@ describe('downloadSelectedImages', () => {
     expect(result.failures[0]?.message).toContain('最多处理 9 张图片');
   });
 
+  it('未加载图片仍占用 9 张选择上限，不能用后续图片绕过', async () => {
+    const selected = Array.from({ length: 10 }, (_, index) => ({
+      ...selectedImage,
+      id: `selected-${String(index + 1)}`,
+      loadStatus: index === 0 ? ('idle' as const) : ('loaded' as const),
+      location: {
+        kind: 'remote' as const,
+        url: `https://img.example.com/selected-${String(index + 1)}.png`,
+        extractedBy: 'open-graph' as const
+      }
+    }));
+    let requests = 0;
+
+    const result = await downloadSelectedImages(() => {
+      requests += 1;
+      return Promise.resolve(
+        new Response(new Uint8Array([1]), { headers: { 'content-type': 'image/png' } })
+      );
+    }, selected);
+
+    expect(requests).toBe(8);
+    expect(result.failures.find((failure) => failure.id === 'selected-1')?.message).toBe(
+      '图片尚未成功加载'
+    );
+    expect(result.failures.find((failure) => failure.id === 'selected-10')?.message).toContain(
+      '最多处理 9 张图片'
+    );
+  });
+
   it('图片原始数据总量不超过 20 MB', async () => {
     const selected = Array.from({ length: 3 }, (_, index) => ({
       ...selectedImage,
@@ -318,5 +423,121 @@ describe('downloadSelectedImages', () => {
 
     expect(result.files).toHaveLength(2);
     expect(result.failures[0]?.message).toContain('图片总量超过 20 MB 上限');
+  });
+});
+
+describe('prepareSelectedImages', () => {
+  it('从本地媒体仓储读取已选择图片', async () => {
+    const fetchMock: ImageFetchLike = () => Promise.reject(new Error('本地图片不应触发网络请求'));
+    const mediaStoreMock: Pick<MediaStore, 'get'> = {
+      get: () =>
+        Promise.resolve({
+          assetId: 'asset-1',
+          kind: 'image' as const,
+          fileName: 'local.png',
+          mimeType: 'image/png',
+          byteLength: 3,
+          createdAt: '2026-08-31T13:00:00.000Z',
+          blob: new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' })
+        })
+    };
+
+    const result = await prepareSelectedImages(fetchMock, mediaStoreMock, [
+      {
+        id: 'local-1',
+        location: {
+          kind: 'local',
+          assetId: 'asset-1',
+          fileName: 'local.png',
+          mimeType: 'image/png',
+          byteLength: 3
+        },
+        selected: true,
+        loadStatus: 'loaded'
+      }
+    ]);
+
+    expect(result.files).toEqual([
+      expect.objectContaining({ id: 'local-1', name: 'local.png', mimeType: 'image/png' })
+    ]);
+  });
+
+  it('本地资源缺失时安全跳过且不阻止其余图片', async () => {
+    const result = await prepareSelectedImages(
+      () =>
+        Promise.resolve(
+          new Response(new Uint8Array([4, 5]), {
+            headers: { 'content-type': 'image/jpeg', 'content-length': '2' }
+          })
+        ),
+      { get: () => Promise.resolve(null) },
+      [
+        {
+          id: 'missing',
+          location: {
+            kind: 'local',
+            assetId: 'missing-asset',
+            fileName: 'missing.png',
+            mimeType: 'image/png',
+            byteLength: 3
+          },
+          selected: true,
+          loadStatus: 'loaded'
+        },
+        {
+          id: 'remote',
+          location: {
+            kind: 'remote',
+            url: 'https://img.example.com/remote.jpg',
+            extractedBy: 'dom'
+          },
+          selected: true,
+          loadStatus: 'loaded'
+        }
+      ]
+    );
+
+    expect(result.files.map((file) => file.id)).toEqual(['remote']);
+    expect(result.failures).toContainEqual({ id: 'missing', message: '本地图片不存在或已被删除' });
+  });
+
+  it.each([
+    ['image/svg+xml', 3, '图片类型不受支持'],
+    ['image/png', 10 * 1024 * 1024 + 1, '图片超过 10 MB 上限']
+  ])('本地图片统一执行 MIME 与单图大小限制：%s', async (mimeType, byteLength, message) => {
+    const blob = new Blob([new Uint8Array([1, 2, 3])], { type: mimeType });
+    Object.defineProperty(blob, 'size', { value: byteLength });
+    const result = await prepareSelectedImages(
+      () => Promise.reject(new Error('不应下载本地图片')),
+      {
+        get: () =>
+          Promise.resolve({
+            assetId: 'asset-1',
+            kind: 'image',
+            fileName: 'local.png',
+            mimeType,
+            byteLength,
+            createdAt: '2026-08-31T13:00:00.000Z',
+            blob
+          })
+      },
+      [
+        {
+          id: 'local',
+          location: {
+            kind: 'local',
+            assetId: 'asset-1',
+            fileName: 'local.png',
+            mimeType: 'image/png',
+            byteLength: 3
+          },
+          selected: true,
+          loadStatus: 'loaded'
+        }
+      ]
+    );
+
+    expect(result.files).toEqual([]);
+    expect(result.failures[0]?.message).toContain(message);
   });
 });

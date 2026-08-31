@@ -2,26 +2,21 @@ import { createAiClient } from '../ai/client';
 import { checkXianyuLoginFromTabs } from './login-check';
 import { createFailureLogEntry, createSuccessLogEntry } from './operation-log-factory';
 import { ensureProductDestination, normalizeHttpUrl } from './permissions';
-import {
-  selectSourceTab,
-  selectXianyuLoginTab,
-  selectXianyuTab,
-  type BrowserTab
-} from './tabs';
+import { selectSourceTab, selectXianyuLoginTab, selectXianyuTab, type BrowserTab } from './tabs';
 import type { AppError, AppErrorCode, OperationResult } from '../domain/errors';
 import { parseParsedProduct, parseRuntimeMessage, type RuntimeMessage } from '../domain/messages';
 import type { ParsedProduct, ProductDraft } from '../domain/product';
 import { createLocalStore, type StorageAreaLike } from '../storage/local-store';
+import { createMediaStore } from '../storage/media-store';
 import type { OperationLogEntry } from '../storage/operation-log';
+import { parseXianyuFillResult, prepareSelectedImages, type FillResult } from '../xianyu/fill';
 import {
-  downloadSelectedImages,
-  parseXianyuFillResult,
-  type FillResult
-} from '../xianyu/fill';
-import {
-  sendXianyuMessage,
-  type XianyuContentDependencies
-} from '../xianyu/content-ready';
+  MEDIA_TRANSFER_PORT_NAME,
+  createMediaTransferRegistry,
+  isMediaTransferClientRequest,
+  isTrustedMediaTransferSender
+} from '../xianyu/media-transfer';
+import { sendXianyuMessage, type XianyuContentDependencies } from '../xianyu/content-ready';
 import type { XianyuLoginCheckResult, XianyuLoginState } from '../xianyu/login';
 import {
   prepareXianyuPublishTab,
@@ -42,6 +37,8 @@ function createStorageArea(): StorageAreaLike {
 }
 
 const store = createLocalStore(createStorageArea());
+const mediaStore = createMediaStore();
+const mediaTransferRegistry = createMediaTransferRegistry(mediaStore);
 const aiClient = createAiClient(fetch);
 
 function toBrowserTab(tab: Browser.tabs.Tab): BrowserTab | null {
@@ -265,14 +262,21 @@ async function fillDraft(draft: ProductDraft): Promise<FillResult> {
     throw new Error('无法确认闲鱼登录状态，请在闲鱼页面检查后重试');
   }
 
-  const downloaded = await downloadSelectedImages(fetch, draft.images);
+  const downloaded = await prepareSelectedImages(fetch, mediaStore, draft.images);
   if (downloaded.files.length === 0) {
     throw new Error(downloaded.failures.at(0)?.message ?? '没有可上传图片');
   }
-  const response: unknown = await sendXianyuMessage(
-    xianyuContentDependencies(),
-    tab.tabId,
-    {
+  let videoTransfer: Awaited<ReturnType<typeof mediaTransferRegistry.create>> | undefined;
+  let videoFailure: string | undefined;
+  if (draft.video !== undefined) {
+    try {
+      videoTransfer = await mediaTransferRegistry.create(draft.video.assetId, tab.tabId);
+    } catch (error) {
+      videoFailure = error instanceof Error ? error.message : '视频传输准备失败';
+    }
+  }
+  try {
+    const response: unknown = await sendXianyuMessage(xianyuContentDependencies(), tab.tabId, {
       type: 'FILL_XIANYU_FORM',
       payload: {
         title: draft.title,
@@ -281,24 +285,34 @@ async function fillDraft(draft: ProductDraft): Promise<FillResult> {
         ...(draft.originalPrice === undefined ? {} : { originalPrice: draft.originalPrice }),
         shippingMethod: draft.shippingMethod,
         categoryNote: draft.categoryNote,
-        images: downloaded.files
+        images: downloaded.files,
+        ...(videoTransfer === undefined ? {} : { videoTransfer })
       }
+    });
+    const fillResult = parseXianyuFillResult(response);
+    if (fillResult === null) {
+      throw new Error('闲鱼页面返回了无法识别的填写结果');
     }
-  );
-  const fillResult = parseXianyuFillResult(response);
-  if (fillResult === null) {
-    throw new Error('闲鱼页面返回了无法识别的填写结果');
-  }
-  if (!fillResult.ok) {
-    throw new Error(fillResult.error.message);
-  }
-  return {
-    ...fillResult.value,
-    warnings: [
+    if (!fillResult.ok) {
+      throw new Error(fillResult.error.message);
+    }
+    const skipped = [...fillResult.value.skipped];
+    const warnings = [
       ...fillResult.value.warnings,
       ...downloaded.failures.map((failure) => `${failure.id}：${failure.message}`)
-    ]
-  };
+    ];
+    if (videoFailure !== undefined) {
+      skipped.push({ field: 'video', reason: `${videoFailure}，请在闲鱼页面手动上传视频` });
+      warnings.push(`视频未自动填入：${videoFailure}`);
+    }
+    return { ...fillResult.value, skipped, warnings };
+  } finally {
+    if (videoTransfer !== undefined) {
+      await mediaTransferRegistry
+        .release(videoTransfer.sessionId, tab.tabId)
+        .catch(() => undefined);
+    }
+  }
 }
 
 async function openXianyuLogin(): Promise<void> {
@@ -391,7 +405,13 @@ async function handleRuntimeMessage(message: RuntimeMessage): Promise<OperationR
     const messageText = error instanceof Error ? error.message : '操作失败';
     const code = codeFor(message, error);
     await appendLogSafely(() =>
-      createFailureLogEntry(message, messageText, code, crypto.randomUUID(), new Date().toISOString())
+      createFailureLogEntry(
+        message,
+        messageText,
+        code,
+        crypto.randomUUID(),
+        new Date().toISOString()
+      )
     );
     return { ok: false, error: appError(code, messageText) };
   }
@@ -408,6 +428,91 @@ function isTrustedSidePanelSender(sender: { id?: string; url?: string }): boolea
   } catch {
     return false;
   }
+}
+
+function registerMediaTransferPort(port: Browser.runtime.Port): void {
+  if (port.name !== MEDIA_TRANSFER_PORT_NAME) {
+    port.disconnect();
+    return;
+  }
+  const tabId = isTrustedMediaTransferSender(port.sender ?? {}, browser.runtime.id);
+  if (tabId === null) {
+    port.disconnect();
+    return;
+  }
+  let activeSessionId: string | undefined;
+  let reading = false;
+  let disconnected = false;
+
+  const releaseActiveSession = async (): Promise<void> => {
+    if (activeSessionId === undefined) {
+      return;
+    }
+    const sessionId = activeSessionId;
+    activeSessionId = undefined;
+    await mediaTransferRegistry.release(sessionId, tabId).catch(() => undefined);
+  };
+  const disconnect = async (): Promise<void> => {
+    await releaseActiveSession();
+    if (!disconnected) {
+      disconnected = true;
+      port.disconnect();
+    }
+  };
+  port.onDisconnect.addListener(() => {
+    disconnected = true;
+    void releaseActiveSession();
+  });
+  port.onMessage.addListener((value: unknown) => {
+    if (!isMediaTransferClientRequest(value)) {
+      void disconnect();
+      return;
+    }
+    if (activeSessionId !== undefined && value.sessionId !== activeSessionId) {
+      void disconnect();
+      return;
+    }
+    activeSessionId = value.sessionId;
+    if (value.type === 'CLOSE') {
+      void disconnect();
+      return;
+    }
+    if (reading) {
+      port.postMessage({
+        type: 'ERROR',
+        sessionId: value.sessionId,
+        message: '媒体传输分块请求尚未完成'
+      });
+      void disconnect();
+      return;
+    }
+    reading = true;
+    void mediaTransferRegistry
+      .read(value.sessionId, tabId, value.offset)
+      .then(
+        (chunk) => {
+          if (!disconnected) {
+            port.postMessage({ type: 'CHUNK', chunk });
+          }
+          if (chunk.done) {
+            activeSessionId = undefined;
+          }
+        },
+        (error: unknown) => {
+          if (!disconnected) {
+            port.postMessage({
+              type: 'ERROR',
+              sessionId: value.sessionId,
+              message: error instanceof Error ? error.message : '媒体传输失败'
+            });
+          }
+          void disconnect();
+        }
+      )
+      .finally(() => {
+        reading = false;
+      });
+  });
 }
 
 export function registerBackgroundHandlers(): void {
@@ -427,6 +532,8 @@ export function registerBackgroundHandlers(): void {
     void handleRuntimeMessage(parsedMessage).then(sendResponse);
     return true;
   });
+  browser.runtime.onConnect.addListener(registerMediaTransferPort);
+  browser.tabs.onRemoved.addListener((tabId) => mediaTransferRegistry.releaseForTab(tabId));
 }
 
 export { XIANYU_PUBLISH_URL };

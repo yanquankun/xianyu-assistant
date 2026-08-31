@@ -24,7 +24,9 @@ export function findTextControl(
     if (!label.innerText.includes(labelText)) {
       continue;
     }
-    const control = label.control ?? label.querySelector<HTMLElement>('input, textarea, [contenteditable="true"]');
+    const control =
+      label.control ??
+      label.querySelector<HTMLElement>('input, textarea, [contenteditable="true"]');
     if (control !== null && visible(control)) {
       return control;
     }
@@ -59,10 +61,59 @@ export function fillTextControl(control: TextControl, value: string): void {
   control.blur();
 }
 
-export function findFileInput(document: Document): HTMLInputElement | null {
-  return document.querySelector<HTMLInputElement>(
-    'input[name="images"][type="file"], input[type="file"][multiple], input[type="file"]'
-  );
+function isVideoFileInput(input: HTMLInputElement): boolean {
+  const accept = input.accept.toLowerCase();
+  const name = input.name.toLowerCase();
+  const accessibleName = input.getAttribute('aria-label')?.toLowerCase() ?? '';
+  return accept.includes('video') || name.includes('video') || accessibleName.includes('视频');
+}
+
+function labeledFileInput(document: Document, labelText: string): HTMLInputElement | null {
+  for (const label of document.querySelectorAll<HTMLLabelElement>('label')) {
+    if (!label.innerText.includes(labelText)) {
+      continue;
+    }
+    const input = label.control ?? label.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input instanceof HTMLInputElement && input.type === 'file' && visible(input)) {
+      return input;
+    }
+  }
+  return null;
+}
+
+export function findImageFileInput(document: Document): HTMLInputElement | null {
+  const preferred = document.querySelector<HTMLInputElement>('input[name="images"][type="file"]');
+  if (preferred !== null && visible(preferred) && !isVideoFileInput(preferred)) {
+    return preferred;
+  }
+  const labeled = labeledFileInput(document, '图片');
+  if (labeled !== null && !isVideoFileInput(labeled)) {
+    return labeled;
+  }
+  for (const input of document.querySelectorAll<HTMLInputElement>('input[type="file"]')) {
+    if (
+      visible(input) &&
+      !isVideoFileInput(input) &&
+      (input.accept.includes('image') || input.multiple)
+    ) {
+      return input;
+    }
+  }
+  return null;
+}
+
+export function findVideoFileInput(document: Document): HTMLInputElement | null {
+  const preferred = document.querySelector<HTMLInputElement>('input[name="video"][type="file"]');
+  if (preferred !== null && visible(preferred) && isVideoFileInput(preferred)) {
+    return preferred;
+  }
+  for (const input of document.querySelectorAll<HTMLInputElement>('input[type="file"]')) {
+    if (visible(input) && isVideoFileInput(input)) {
+      return input;
+    }
+  }
+  const labeled = labeledFileInput(document, '视频');
+  return labeled;
 }
 
 export function fillFileInput(input: HTMLInputElement, files: readonly File[]): void {

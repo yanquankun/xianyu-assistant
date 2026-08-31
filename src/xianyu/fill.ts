@@ -1,6 +1,14 @@
 import { getRemoteImageUrl, type ProductImage } from '../domain/product';
 import type { AppError, OperationResult } from '../domain/errors';
-import { fillFileInput, fillTextControl, findFileInput, findTextControl } from './dom';
+import type { MediaStore, StoredMediaAsset } from '../storage/media-store';
+import {
+  fillFileInput,
+  fillTextControl,
+  findImageFileInput,
+  findTextControl,
+  findVideoFileInput
+} from './dom';
+import { isMediaTransferDescriptor, type MediaTransferDescriptor } from './media-transfer';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_COUNT = 9;
@@ -36,10 +44,15 @@ export interface XianyuFillPayload {
   shippingMethod: string;
   categoryNote: string;
   images: TransferableImage[];
+  videoTransfer?: MediaTransferDescriptor;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowedKeys.includes(key));
 }
 
 function isBoundedText(value: unknown, maximum: number): value is string {
@@ -49,6 +62,7 @@ function isBoundedText(value: unknown, maximum: number): value is string {
 function isTransferableImage(value: unknown): value is TransferableImage {
   return (
     isRecord(value) &&
+    hasOnlyKeys(value, ['id', 'name', 'mimeType', 'dataBase64']) &&
     isBoundedText(value.id, 200) &&
     value.id.length > 0 &&
     isBoundedText(value.name, 300) &&
@@ -62,6 +76,16 @@ function isTransferableImage(value: unknown): value is TransferableImage {
 export function isXianyuFillPayload(value: unknown): value is XianyuFillPayload {
   if (
     !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      'title',
+      'description',
+      'price',
+      'originalPrice',
+      'shippingMethod',
+      'categoryNote',
+      'images',
+      'videoTransfer'
+    ]) ||
     !isBoundedText(value.title, 500) ||
     !isBoundedText(value.description, 20_000) ||
     typeof value.price !== 'number' ||
@@ -75,7 +99,8 @@ export function isXianyuFillPayload(value: unknown): value is XianyuFillPayload 
     !isBoundedText(value.categoryNote, 1_000) ||
     !Array.isArray(value.images) ||
     value.images.length > MAX_IMAGE_COUNT ||
-    !value.images.every(isTransferableImage)
+    !value.images.every(isTransferableImage) ||
+    (value.videoTransfer !== undefined && !isMediaTransferDescriptor(value.videoTransfer))
   ) {
     return false;
   }
@@ -86,7 +111,7 @@ export function isXianyuFillPayload(value: unknown): value is XianyuFillPayload 
   return totalBase64Length <= Math.ceil((MAX_TOTAL_IMAGE_BYTES * 4) / 3) + 4;
 }
 
-export type FillField = 'title' | 'price' | 'description' | 'images';
+export type FillField = 'title' | 'price' | 'description' | 'images' | 'video';
 
 export interface SkippedField {
   field: FillField;
@@ -99,7 +124,7 @@ export interface FillResult {
   warnings: string[];
 }
 
-const FILL_FIELDS: readonly FillField[] = ['title', 'price', 'description', 'images'];
+const FILL_FIELDS: readonly FillField[] = ['title', 'price', 'description', 'images', 'video'];
 
 function isFillField(value: unknown): value is FillField {
   return typeof value === 'string' && FILL_FIELDS.includes(value as FillField);
@@ -271,11 +296,73 @@ export async function downloadSelectedImages(
   fetchImpl: ImageFetchLike,
   images: readonly ProductImage[]
 ): Promise<ImageDownloadResult> {
+  return prepareSelectedImages(fetchImpl, { get: () => Promise.resolve(null) }, images);
+}
+
+function localImageFailure(image: ProductImage, message: string): ImageDownloadFailure {
+  return { id: image.id, message };
+}
+
+function validateLocalImageAsset(
+  image: ProductImage,
+  asset: StoredMediaAsset | null
+): StoredMediaAsset {
+  if (image.location.kind !== 'local' || asset?.kind !== 'image') {
+    throw new ImageDownloadError('本地图片不存在或已被删除');
+  }
+  if (!ALLOWED_IMAGE_TYPES.has(asset.mimeType) || asset.blob.type !== asset.mimeType) {
+    throw new ImageDownloadError('图片类型不受支持');
+  }
+  if (asset.byteLength > MAX_IMAGE_BYTES || asset.blob.size > MAX_IMAGE_BYTES) {
+    throw new ImageDownloadError('图片超过 10 MB 上限');
+  }
+  if (
+    asset.byteLength <= 0 ||
+    asset.blob.size !== asset.byteLength ||
+    asset.assetId !== image.location.assetId ||
+    asset.fileName !== image.location.fileName ||
+    asset.mimeType !== image.location.mimeType ||
+    asset.byteLength !== image.location.byteLength
+  ) {
+    throw new ImageDownloadError('本地图片数据无效');
+  }
+  return asset;
+}
+
+async function readLocalImage(
+  mediaStore: Pick<MediaStore, 'get'>,
+  image: ProductImage
+): Promise<{ file: TransferableImage; byteLength: number }> {
+  if (image.location.kind !== 'local') {
+    throw new ImageDownloadError('本地图片引用无效');
+  }
+  const asset = validateLocalImageAsset(image, await mediaStore.get(image.location.assetId));
+  const bytes = new Uint8Array(await asset.blob.arrayBuffer());
+  if (bytes.byteLength !== asset.byteLength) {
+    throw new ImageDownloadError('本地图片数据无效');
+  }
+  return {
+    file: {
+      id: image.id,
+      name: asset.fileName,
+      mimeType: asset.mimeType,
+      dataBase64: bytesToBase64(bytes)
+    },
+    byteLength: bytes.byteLength
+  };
+}
+
+export async function prepareSelectedImages(
+  fetchImpl: ImageFetchLike,
+  mediaStore: Pick<MediaStore, 'get'>,
+  images: readonly ProductImage[]
+): Promise<ImageDownloadResult> {
   const files: TransferableImage[] = [];
   const failures: ImageDownloadFailure[] = [];
   const selected = images.filter((candidate) => candidate.selected);
-  const ready = selected.filter((candidate) => candidate.loadStatus === 'loaded');
-  for (const image of selected.filter((candidate) => candidate.loadStatus !== 'loaded')) {
+  const allowedSelected = selected.slice(0, MAX_IMAGE_COUNT);
+  const ready = allowedSelected.filter((candidate) => candidate.loadStatus === 'loaded');
+  for (const image of allowedSelected.filter((candidate) => candidate.loadStatus !== 'loaded')) {
     const remoteUrl = getRemoteImageUrl(image);
     failures.push(
       remoteUrl === null
@@ -283,7 +370,7 @@ export async function downloadSelectedImages(
         : { id: image.id, url: remoteUrl, message: '图片尚未成功加载' }
     );
   }
-  for (const image of ready.slice(MAX_IMAGE_COUNT)) {
+  for (const image of selected.slice(MAX_IMAGE_COUNT)) {
     const remoteUrl = getRemoteImageUrl(image);
     failures.push(
       remoteUrl === null
@@ -296,30 +383,30 @@ export async function downloadSelectedImages(
     );
   }
   let totalBytes = 0;
-  for (const image of ready.slice(0, MAX_IMAGE_COUNT)) {
+  for (const image of ready) {
     const remoteUrl = getRemoteImageUrl(image);
-    if (remoteUrl === null) {
-      failures.push({ id: image.id, message: '本地图片将在媒体填充阶段处理' });
-      continue;
-    }
     try {
-      const downloaded = await downloadImage(fetchImpl, image, remoteUrl);
+      const downloaded =
+        remoteUrl === null
+          ? await readLocalImage(mediaStore, image)
+          : await downloadImage(fetchImpl, image, remoteUrl);
       if (totalBytes + downloaded.byteLength > MAX_TOTAL_IMAGE_BYTES) {
-        failures.push({
-          id: image.id,
-          url: remoteUrl,
-          message: '图片总量超过 20 MB 上限'
-        });
+        failures.push(
+          remoteUrl === null
+            ? localImageFailure(image, '图片总量超过 20 MB 上限')
+            : { id: image.id, url: remoteUrl, message: '图片总量超过 20 MB 上限' }
+        );
         continue;
       }
       totalBytes += downloaded.byteLength;
       files.push(downloaded.file);
     } catch (error) {
-      failures.push({
-        id: image.id,
-        url: remoteUrl,
-        message: error instanceof Error ? error.message : '图片处理失败'
-      });
+      const message = error instanceof Error ? error.message : '图片处理失败';
+      failures.push(
+        remoteUrl === null
+          ? localImageFailure(image, message)
+          : { id: image.id, url: remoteUrl, message }
+      );
     }
   }
   return { files, failures };
@@ -327,7 +414,7 @@ export async function downloadSelectedImages(
 
 function fillTextField(
   document: Document,
-  field: Exclude<FillField, 'images'>,
+  field: 'title' | 'price' | 'description',
   selectors: readonly string[],
   label: string,
   value: string,
@@ -360,7 +447,8 @@ function createFiles(images: readonly TransferableImage[]): File[] {
 
 export async function fillXianyuDraft(
   document: Document,
-  payload: XianyuFillPayload
+  payload: XianyuFillPayload,
+  videoFile?: File
 ): Promise<FillResult> {
   const result: FillResult = { filled: [], skipped: [], warnings: [] };
   fillTextField(
@@ -388,7 +476,7 @@ export async function fillXianyuDraft(
     result
   );
 
-  const input = findFileInput(document);
+  const input = findImageFileInput(document);
   if (input === null) {
     result.skipped.push({ field: 'images', reason: '未找到图片上传字段' });
   } else if (payload.images.length === 0) {
@@ -403,6 +491,28 @@ export async function fillXianyuDraft(
         reason: error instanceof Error ? error.message : '图片填写失败'
       });
     }
+  }
+
+  if (videoFile !== undefined) {
+    const videoInput = findVideoFileInput(document);
+    if (videoInput === null) {
+      result.skipped.push({
+        field: 'video',
+        reason: '未找到可靠的视频上传字段，请在闲鱼页面手动上传视频'
+      });
+    } else {
+      try {
+        fillFileInput(videoInput, [videoFile]);
+        result.filled.push('video');
+      } catch (error) {
+        result.skipped.push({
+          field: 'video',
+          reason: error instanceof Error ? error.message : '视频填写失败'
+        });
+      }
+    }
+  } else if (payload.videoTransfer !== undefined) {
+    result.skipped.push({ field: 'video', reason: '视频传输失败，请在闲鱼页面手动上传视频' });
   }
   await Promise.resolve();
   return result;

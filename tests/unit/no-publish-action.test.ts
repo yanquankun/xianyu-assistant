@@ -12,7 +12,12 @@ describe('最终发布安全门禁', () => {
   });
 
   it('闲鱼填写入口不存在点击或提交表单调用', () => {
-    const files = ['entrypoints/xianyu.content.ts', 'src/xianyu/dom.ts', 'src/xianyu/fill.ts'];
+    const files = [
+      'entrypoints/xianyu.content.ts',
+      'src/xianyu/dom.ts',
+      'src/xianyu/fill.ts',
+      'src/xianyu/media-transfer.ts'
+    ];
     const source = files
       .map((file) => readFileSync(resolve(process.cwd(), file), 'utf8'))
       .join('\n');

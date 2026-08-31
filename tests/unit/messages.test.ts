@@ -118,81 +118,81 @@ describe('parseStoredProductDraft', () => {
       ]
     });
 
-    expect(result).toEqual({
-      migrated: true,
-      draft: expect.objectContaining({
-        images: [
-          expect.objectContaining({
-            id: 'legacy-image',
-            location: {
-              kind: 'remote',
-              url: 'https://img.example.com/a.jpg',
-              extractedBy: 'dom'
-            }
-          })
-        ]
-      })
-    });
+    expect(result?.migrated).toBe(true);
+    expect(result?.draft.images).toEqual([
+      {
+        id: 'legacy-image',
+        location: {
+          kind: 'remote',
+          url: 'https://img.example.com/a.jpg',
+          extractedBy: 'dom'
+        },
+        selected: true,
+        loadStatus: 'loaded'
+      }
+    ]);
   });
 
   it('拒绝同时缺少远程地址和本地资源标识的图片', () => {
     expect(
       isProductDraft({
         ...draft,
-        images: [
-          { id: 'bad', location: { kind: 'local' }, selected: true, loadStatus: 'loaded' }
-        ]
+        images: [{ id: 'bad', location: { kind: 'local' }, selected: true, loadStatus: 'loaded' }]
       })
     ).toBe(false);
   });
 
-  it.each(['blob:temporary-image', 'data:image/png;base64,aGVsbG8=', 'javascript:alert(1)', '/image.jpg'])(
-    '迁移时移除非 HTTP(S) 旧版图片：%s',
-    (url) => {
-      const result = parseStoredProductDraft({
-        ...draft,
-        images: [
-          {
-            id: 'legacy-image',
-            url,
-            source: 'dom',
-            selected: true,
-            loadStatus: 'loaded'
-          }
-        ]
-      });
-
-      expect(result).toMatchObject({
-        migrated: true,
-        draft: {
-          images: [],
-          warnings: ['已移除无法恢复的旧版图片']
+  it.each([
+    'blob:temporary-image',
+    'data:image/png;base64,aGVsbG8=',
+    'javascript:alert(1)',
+    '/image.jpg'
+  ])('迁移时移除非 HTTP(S) 旧版图片：%s', (url) => {
+    const result = parseStoredProductDraft({
+      ...draft,
+      images: [
+        {
+          id: 'legacy-image',
+          url,
+          source: 'dom',
+          selected: true,
+          loadStatus: 'loaded'
         }
-      });
-    }
-  );
+      ]
+    });
 
-  it.each(['blob:temporary-image', 'data:image/png;base64,aGVsbG8=', 'javascript:alert(1)', '/image.jpg'])(
-    '运行时消息拒绝非 HTTP(S) 远程图片：%s',
-    (url) => {
-      expect(
-        parseRuntimeMessage({
-          type: 'FILL_XIANYU_DRAFT',
-          draft: {
-            ...draft,
-            images: [
-              {
-                id: 'remote-image',
-                location: { kind: 'remote', url, extractedBy: 'dom' },
-                selected: true,
-                loadStatus: 'loaded'
-              }
-            ]
-          }
-        })
-      ).toBeNull();
-    }
-  );
+    expect(result).toMatchObject({
+      migrated: true,
+      draft: {
+        images: [],
+        warnings: ['已移除无法恢复的旧版图片']
+      }
+    });
+  });
+
+  it.each([
+    'blob:temporary-image',
+    'data:image/png;base64,aGVsbG8=',
+    'javascript:alert(1)',
+    '/image.jpg'
+  ])('运行时消息拒绝非 HTTP(S) 远程图片：%s', (url) => {
+    expect(
+      parseRuntimeMessage({
+        type: 'FILL_XIANYU_DRAFT',
+        draft: {
+          ...draft,
+          images: [
+            {
+              id: 'remote-image',
+              location: { kind: 'remote', url, extractedBy: 'dom' },
+              selected: true,
+              loadStatus: 'loaded'
+            }
+          ]
+        }
+      })
+    ).toBeNull();
+  });
 
   it('运行时消息接受完整 HTTPS 远程图片', () => {
     expect(
