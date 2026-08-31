@@ -430,6 +430,59 @@ describe('App', () => {
     expect(screen.getByText('late.png')).toBeVisible();
   });
 
+  it('清除草稿等待期间丢弃迟到媒体并补偿删除 Blob', async () => {
+    const media = createDeferred<StoredMediaMetadata>();
+    const clear = createDeferred<undefined>();
+    const savedTitles: string[] = [];
+    const deletedAssetIds: string[] = [];
+    let clearCalls = 0;
+    render(
+      <App
+        services={createServices({
+          saveDraft: (draft) => {
+            savedTitles.push(draft.title);
+            return Promise.resolve();
+          },
+          saveMedia: () => media.promise,
+          clearDraft: () => {
+            clearCalls += 1;
+            return clear.promise;
+          },
+          deleteMedia: (assetId) => {
+            deletedAssetIds.push(assetId);
+            return Promise.resolve();
+          }
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '手动填写' }));
+    fireEvent.change(await screen.findByLabelText('商品标题'), { target: { value: '需要清除' } });
+    fireEvent.change(screen.getByLabelText('上传商品图片'), {
+      target: { files: [new File(['image'], 'after-clear.png', { type: 'image/png' })] }
+    });
+    fireEvent.click(screen.getByRole('button', { name: '返回选择方式' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认返回' }));
+    await waitFor(() => expect(clearCalls).toBe(1));
+    const saveCallsBeforeLateMedia = [...savedTitles];
+
+    media.resolve({
+      assetId: 'after-clear-media',
+      kind: 'image',
+      fileName: 'after-clear.png',
+      mimeType: 'image/png',
+      byteLength: 5,
+      createdAt: '2026-08-31T15:00:00.000Z'
+    });
+    await waitFor(() => expect(deletedAssetIds).toContain('after-clear-media'));
+    expect(screen.queryByText('after-clear.png')).toBeNull();
+    expect(savedTitles).toEqual(saveCallsBeforeLateMedia);
+
+    clear.resolve(undefined);
+    expect(await screen.findByRole('button', { name: '手动填写' })).toBeVisible();
+    expect(savedTitles).toEqual(saveCallsBeforeLateMedia);
+  });
+
   it('草稿删除失败时保留编辑内容并显示清除错误', async () => {
     render(
       <App
@@ -446,6 +499,7 @@ describe('App', () => {
 
     expect(await screen.findByText('草稿清除失败：存储不可用')).toBeVisible();
     expect(screen.getByDisplayValue('保留的标题')).toBeVisible();
+    expect(screen.getByRole('button', { name: '返回选择方式' })).toHaveFocus();
   });
 
   it('返回后丢弃迟到的填表完成结果', async () => {

@@ -380,6 +380,8 @@ export function App({ services }: { services: SidePanelServices }) {
     }
     const localAssetIds = getLocalAssetIds(draft);
     initializationGenerationRef.current += 1;
+    imageUploadRequestRef.current += 1;
+    videoUploadRequestRef.current += 1;
     setIsResetting(true);
     try {
       await draftSaveQueue.current;
@@ -389,8 +391,6 @@ export function App({ services }: { services: SidePanelServices }) {
       }
       await services.clearDraft();
       workflowGenerationRef.current += 1;
-      imageUploadRequestRef.current += 1;
-      videoUploadRequestRef.current += 1;
       loginCheckRequestRef.current += 1;
       focusSourceAfterResetRef.current = true;
       dispatch({ type: 'WORKFLOW_RESET' });
@@ -409,7 +409,7 @@ export function App({ services }: { services: SidePanelServices }) {
         // A future bounded cleanup retries orphaned media without restoring the deleted draft.
       }
     } catch (error) {
-      setResetConfirmation(null);
+      closeResetConfirmation();
       dispatch({ type: 'OPERATION_FAILED', message: `草稿清除失败：${errorMessage(error)}` });
     } finally {
       setIsResetting(false);
