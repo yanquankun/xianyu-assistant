@@ -22,6 +22,18 @@ function createServices(overrides: Partial<SidePanelServices> = {}): SidePanelSe
     saveSettings: () => Promise.resolve(),
     loadDraft: () => Promise.resolve(null),
     saveDraft: () => Promise.resolve(),
+    saveMedia: (file, kind) =>
+      Promise.resolve({
+        assetId: `asset-${file.name}`,
+        kind,
+        fileName: file.name,
+        mimeType: file.type,
+        byteLength: file.size,
+        createdAt: '2026-08-31T12:00:00.000Z'
+      }),
+    loadMedia: () => Promise.resolve(null),
+    deleteMedia: () => Promise.resolve(),
+    cleanupMedia: () => Promise.resolve(),
     parseProduct: () => Promise.resolve(parsedProduct),
     testAiConnection: () => Promise.resolve({ connected: true, model: 'gpt-test' }),
     expandDraft: () =>

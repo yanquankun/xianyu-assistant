@@ -1,11 +1,17 @@
-import type { ProductDraft } from '../../domain/product';
-import { ImagePicker } from './ImagePicker';
+import type { ImageLoadStatus, ProductDraft } from '../../domain/product';
+import type { StoredMediaAsset } from '../../storage/media-store';
+import { MediaPicker } from './MediaPicker';
 
 interface ProductEditorProps {
   draft: ProductDraft;
   onChange: (draft: ProductDraft) => void;
   onImageToggle: (id: string) => void;
-  onImageLoadStatus: (id: string, status: ProductDraft['images'][number]['loadStatus']) => void;
+  onImageLoadStatus: (id: string, status: ImageLoadStatus) => void;
+  resolveLocalAsset: (assetId: string) => Promise<StoredMediaAsset | null>;
+  onUploadImages: (files: readonly File[]) => void;
+  onUploadVideo: (file: File) => void;
+  onRemoveImage: (id: string) => void;
+  onRemoveVideo: () => void;
 }
 
 const PLATFORM_LABELS: Record<ProductDraft['platform'], string> = {
@@ -24,7 +30,12 @@ export function ProductEditor({
   draft,
   onChange,
   onImageToggle,
-  onImageLoadStatus
+  onImageLoadStatus,
+  resolveLocalAsset,
+  onUploadImages,
+  onUploadVideo,
+  onRemoveImage,
+  onRemoveVideo
 }: ProductEditorProps) {
   const update = (changes: Partial<ProductDraft>) => {
     onChange({ ...draft, ...changes, updatedAt: new Date().toISOString() });
@@ -121,10 +132,17 @@ export function ProductEditor({
       </div>
 
       <div className="field">
-        <span>选择商品图片</span>
-        <ImagePicker
+        <span>商品媒体</span>
+        <MediaPicker
           images={draft.images}
+          video={draft.video}
+          selectedCount={draft.images.filter((image) => image.selected).length}
+          resolveLocalAsset={resolveLocalAsset}
+          onUploadImages={onUploadImages}
+          onUploadVideo={onUploadVideo}
           onToggle={onImageToggle}
+          onRemoveImage={onRemoveImage}
+          onRemoveVideo={onRemoveVideo}
           onLoadStatus={onImageLoadStatus}
         />
       </div>

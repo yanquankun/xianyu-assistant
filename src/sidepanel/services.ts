@@ -5,6 +5,7 @@ import type { OperationResult } from '../domain/errors';
 import type { RuntimeMessage } from '../domain/messages';
 import { getRemoteImageUrl, type ParsedProduct, type ProductDraft } from '../domain/product';
 import type { AiSettings } from '../domain/settings';
+import { createMediaStore } from '../storage/media-store';
 import { createLocalStore, type LocalStore, type StorageAreaLike } from '../storage/local-store';
 import type { OperationLogEntry, OperationStage } from '../storage/operation-log';
 import type { FillResult } from '../xianyu/fill';
@@ -100,6 +101,7 @@ function sourceOrigins(draft: ProductDraft): string[] {
 
 export function createBrowserSidePanelServices(): SidePanelServices {
   const store = createLocalStore(storageArea());
+  const mediaStore = createMediaStore(indexedDB);
   return {
     loadSettings(): Promise<AiSettings | null> {
       return store.getSettings();
@@ -115,6 +117,22 @@ export function createBrowserSidePanelServices(): SidePanelServices {
 
     saveDraft(draft: ProductDraft): Promise<void> {
       return store.saveDraft(draft);
+    },
+
+    saveMedia(file, kind) {
+      return mediaStore.save(file, kind);
+    },
+
+    loadMedia(assetId) {
+      return mediaStore.get(assetId);
+    },
+
+    deleteMedia(assetId) {
+      return mediaStore.delete(assetId);
+    },
+
+    cleanupMedia(referencedAssetIds) {
+      return mediaStore.cleanupExcept(new Set(referencedAssetIds));
     },
 
     async parseProduct(url: string): Promise<ParsedProduct> {

@@ -1,5 +1,6 @@
 import type { ExpansionPreview } from '../ai/validation';
-import type { ParsedProduct, ProductDraft } from '../domain/product';
+import type { ParsedProduct, ProductDraft, ProductImage, ProductVideo } from '../domain/product';
+import { MAX_SELECTED_IMAGES } from '../media/validation';
 import type { XianyuLoginState } from '../xianyu/login';
 
 export type WorkflowPhase = 'idle' | 'parsing' | 'editing' | 'expanding' | 'filling' | 'error';
@@ -27,6 +28,10 @@ export type WorkflowAction =
   | { type: 'DRAFT_CHANGED'; draft: ProductDraft }
   | { type: 'IMAGE_SELECTION_TOGGLED'; id: string }
   | { type: 'IMAGE_LOAD_STATUS_CHANGED'; id: string; loadStatus: ProductDraft['images'][number]['loadStatus'] }
+  | { type: 'LOCAL_IMAGES_ADDED'; images: readonly ProductImage[]; now: string; notice?: string }
+  | { type: 'IMAGE_REMOVED'; id: string; now: string }
+  | { type: 'VIDEO_REPLACED'; video: ProductVideo; now: string }
+  | { type: 'VIDEO_REMOVED'; now: string }
   | { type: 'EXPANSION_STARTED' }
   | { type: 'EXPANSION_RECEIVED'; preview: ExpansionPreview }
   | { type: 'EXPANSION_APPLIED'; now: string }
@@ -159,7 +164,7 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
       {
         const image = state.draft.images.find((candidate) => candidate.id === action.id);
         const selectedCount = state.draft.images.filter((candidate) => candidate.selected).length;
-        if (image === undefined || (!image.selected && selectedCount >= 9)) {
+        if (image === undefined || (!image.selected && selectedCount >= MAX_SELECTED_IMAGES)) {
           return state;
         }
       }
@@ -195,6 +200,74 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
           updatedAt: new Date().toISOString()
         }
       };
+    case 'LOCAL_IMAGES_ADDED':
+      if (state.draft === null) {
+        return state;
+      }
+      {
+        const remainingSlots = Math.max(
+          0,
+          MAX_SELECTED_IMAGES - state.draft.images.filter((image) => image.selected).length
+        );
+        const accepted = action.images.filter((image) => image.selected).slice(0, remainingSlots);
+        const skipped = action.images.length - accepted.length;
+        return {
+          ...state,
+          phase: 'editing',
+          draft: {
+            ...state.draft,
+            images: [...state.draft.images, ...accepted],
+            updatedAt: action.now
+          },
+          statusMessage:
+            action.notice ??
+            (skipped > 0
+              ? `最多选择 ${String(MAX_SELECTED_IMAGES)} 张图片，超出部分未添加`
+              : '本地图片已添加'),
+          errorMessage: null
+        };
+      }
+    case 'IMAGE_REMOVED':
+      if (state.draft === null) {
+        return state;
+      }
+      return {
+        ...state,
+        phase: 'editing',
+        draft: {
+          ...state.draft,
+          images: state.draft.images.filter((image) => image.id !== action.id),
+          updatedAt: action.now
+        },
+        statusMessage: '图片已移除',
+        errorMessage: null
+      };
+    case 'VIDEO_REPLACED':
+      if (state.draft === null) {
+        return state;
+      }
+      return {
+        ...state,
+        phase: 'editing',
+        draft: { ...state.draft, video: action.video, updatedAt: action.now },
+        statusMessage: '视频已保存',
+        errorMessage: null
+      };
+    case 'VIDEO_REMOVED':
+      if (state.draft?.video === undefined) {
+        return state;
+      }
+      {
+        const draft = { ...state.draft, updatedAt: action.now };
+        delete draft.video;
+        return {
+          ...state,
+          phase: 'editing',
+          draft,
+          statusMessage: '视频已移除',
+          errorMessage: null
+        };
+      }
     case 'EXPANSION_STARTED':
       return { ...state, phase: 'expanding', statusMessage: 'AI 正在整理文案', errorMessage: null };
     case 'EXPANSION_RECEIVED':

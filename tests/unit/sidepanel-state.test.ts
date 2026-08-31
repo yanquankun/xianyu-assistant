@@ -210,4 +210,41 @@ describe('reduceWorkflow', () => {
     expect(result.draft?.images.filter((image) => image.selected)).toHaveLength(9);
     expect(result.draft?.images[9]?.selected).toBe(false);
   });
+
+  it('解析图片与本地图片合计最多选择九张', () => {
+    const images = Array.from({ length: 9 }, (_, index) => ({
+      id: `image-${String(index)}`,
+      location: {
+        kind: 'remote' as const,
+        url: `https://img.example.com/${String(index)}.jpg`,
+        extractedBy: 'dom' as const
+      },
+      selected: true,
+      loadStatus: 'loaded' as const
+    }));
+    const state = reduceWorkflow(
+      { ...initialWorkflowState, phase: 'editing', draft: { ...draft, images } },
+      {
+        type: 'LOCAL_IMAGES_ADDED',
+        images: [
+          {
+            id: 'local-10',
+            location: {
+              kind: 'local',
+              assetId: 'asset-10',
+              fileName: 'ten.png',
+              mimeType: 'image/png',
+              byteLength: 3
+            },
+            selected: true,
+            loadStatus: 'loaded'
+          }
+        ],
+        now: '2026-08-31T13:00:00.000Z'
+      }
+    );
+
+    expect(state.draft?.images).toHaveLength(9);
+    expect(state.statusMessage).toContain('最多选择 9 张');
+  });
 });
