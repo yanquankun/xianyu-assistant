@@ -36,6 +36,13 @@ export interface ImageDownloadResult {
   failures: ImageDownloadFailure[];
 }
 
+export function formatImageDownloadFailureWarning(
+  failure: ImageDownloadFailure,
+  index: number
+): string {
+  return `图片 ${String(index + 1)}：${failure.message}`;
+}
+
 export interface XianyuFillPayload {
   title: string;
   description: string;

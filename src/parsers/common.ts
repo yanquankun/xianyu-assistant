@@ -20,6 +20,16 @@ const VERIFICATION_PATTERN = /(?:登录|验证码|安全验证|风险验证|访�
 const VERIFICATION_BODY_PATTERN =
   /(?:请输入验证码|完成安全验证|访问风险[^\n]{0,40}完成验证|扫码登录|captcha|verify)/iu;
 
+function detectExplicitHttpStatus(value: string): string | undefined {
+  const explicitStatus = /\bHTTP(?:\s+Status)?\s+(400|403|404|500)\b/iu.exec(value)?.[1];
+  if (explicitStatus !== undefined) {
+    return explicitStatus;
+  }
+  return /\b(400|403|404|500)\s*(?:[-–—:]\s*)?(?:Bad Request|Forbidden|Not Found|Internal Server Error)\b/iu.exec(
+    value
+  )?.[1];
+}
+
 export function detectProductPageError(
   document: Document,
   pageUrl: string
@@ -27,7 +37,7 @@ export function detectProductPageError(
   const title = document.title.trim();
   const bodyText = document.body.textContent.trim().slice(0, 20_000);
   const pageText = `${title}\n${bodyText}`;
-  const status = /\b(?:HTTP\s+Status\s+)?(400|403|404|500)\b/iu.exec(pageText)?.[1];
+  const status = detectExplicitHttpStatus(pageText);
   if (status !== undefined) {
     return { message: `商品页面返回 HTTP ${status} 错误`, code: `HTTP_${status}` };
   }

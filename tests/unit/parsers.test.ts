@@ -140,6 +140,39 @@ describe('parseProductDocument', () => {
   });
 
   it.each([
+    ['售价 500 元，正常商品文案', '正常售价商品'],
+    ['型号 404 限量版，不是错误页', '正常型号商品']
+  ])('不把正文中的裸状态码数字当作 HTTP 错误：%s', (bodyText, title) => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html><html><head><meta property="og:title" content="${title}" /></head><body>${bodyText}</body></html>`,
+      'text/html'
+    );
+
+    expect(detectProductPageError(document, 'https://item.jd.com/product/100.html')).toBeNull();
+    const result = extractProductDocument(document, 'https://item.jd.com/product/100.html');
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error('正常商品页不应被拒绝');
+    }
+    expect(result.product.title).toBe(title);
+  });
+
+  it.each([
+    ['<title>HTTP Status 500</title>', 'HTTP_500'],
+    ['<title>404 Not Found</title>', 'HTTP_404'],
+    ['<title>商品详情</title><body><h1>HTTP Status 403</h1></body>', 'HTTP_403']
+  ])('仍拒绝具有明确状态错误语义的页面：%s', (markup, code) => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html><html><head>${markup}</head></html>`,
+      'text/html'
+    );
+
+    expect(detectProductPageError(document, 'https://item.jd.com/product/100.html')).toMatchObject({
+      code
+    });
+  });
+
+  it.each([
     ['https://item.jd.com/product/100.html', 'jd'],
     ['https://item.taobao.com/item.htm?id=1', 'taobao'],
     ['https://detail.tmall.com/item.htm?id=1', 'taobao']

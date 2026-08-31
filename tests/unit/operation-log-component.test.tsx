@@ -14,7 +14,8 @@ const detailedEntry: OperationLogEntry = {
   operationLabel: 'AI 扩写',
   details: {
     draft: {
-      sourceUrl: 'https://item.jd.com/1.html',
+      sourceUrl: 'https://3.cn/submitted',
+      canonicalUrl: 'https://item.jd.com/1.html',
       title: '当时生成的标题',
       description: '当时生成的描述',
       price: 88,
@@ -39,9 +40,12 @@ describe('OperationLog', () => {
     fireEvent.click(screen.getByRole('button', { name: /当时生成的标题/u }));
 
     expect(screen.getByText('当时生成的描述')).toBeVisible();
+    expect(screen.getByText('提交链接')).toBeVisible();
+    expect(screen.getByText('最终规范链接')).toBeVisible();
+    expect(screen.getByText('https://3.cn/submitted')).toBeVisible();
     expect(screen.getByText('https://item.jd.com/1.html')).toBeVisible();
-    expect(screen.getByRole('button', { name: '复制链接' })).toBeVisible();
-    expect(screen.getByRole('button', { name: '新窗口打开' })).toBeVisible();
+    expect(screen.getByRole('button', { name: '复制提交链接' })).toBeVisible();
+    expect(screen.getByRole('button', { name: '打开最终规范链接' })).toBeVisible();
   });
 
   it('一次最多展开一条，并在复制失败时给出反馈', async () => {
@@ -62,8 +66,59 @@ describe('OperationLog', () => {
       'true'
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '复制链接' }));
+    fireEvent.click(screen.getByRole('button', { name: '复制最终规范链接' }));
 
-    expect(await screen.findByText('复制失败，请手动选择链接')).toBeVisible();
+    expect(await screen.findByText('最终规范链接复制失败，请手动选择链接')).toBeVisible();
+  });
+
+  it('为两个不同链接分别复制和打开，并提供独立反馈', async () => {
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    render(<OperationLog entries={[detailedEntry]} />);
+    fireEvent.click(screen.getByRole('button', { name: /当时生成的标题/u }));
+
+    fireEvent.click(screen.getByRole('button', { name: '复制提交链接' }));
+    expect(await screen.findByText('提交链接已复制')).toBeVisible();
+    expect(writeText).toHaveBeenCalledWith('https://3.cn/submitted');
+
+    fireEvent.click(screen.getByRole('button', { name: '打开最终规范链接' }));
+    expect(await screen.findByText('无法打开最终规范链接')).toBeVisible();
+    expect(open).toHaveBeenCalledWith(
+      'https://item.jd.com/1.html',
+      '_blank',
+      'noopener,noreferrer'
+    );
+  });
+
+  it('相同 URL 去重，非 HTTP(S) 值不提供任何动作', () => {
+    const sameUrlEntry: OperationLogEntry = {
+      ...detailedEntry,
+      id: 'same-url',
+      details: {
+        draft: {
+          sourceUrl: 'https://item.jd.com/1.html',
+          canonicalUrl: 'https://item.jd.com/1.html'
+        }
+      }
+    };
+    const unsafeEntry: OperationLogEntry = {
+      ...detailedEntry,
+      id: 'unsafe-url',
+      displayTitle: '非安全链接',
+      details: {
+        draft: {
+          sourceUrl: 'javascript:alert(1)',
+          canonicalUrl: 'file:///tmp/private'
+        }
+      }
+    };
+    render(<OperationLog entries={[sameUrlEntry, unsafeEntry]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /当时生成的标题/u }));
+    expect(screen.getAllByText('https://item.jd.com/1.html')).toHaveLength(1);
+    expect(screen.getByText('提交链接与最终规范链接')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: /非安全链接/u }));
+    expect(screen.queryByRole('button', { name: /复制|打开/u })).not.toBeInTheDocument();
   });
 });

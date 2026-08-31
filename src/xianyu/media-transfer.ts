@@ -3,6 +3,7 @@ import type { MediaStore, StoredMediaAsset } from '../storage/media-store';
 
 export const MEDIA_TRANSFER_PORT_NAME = 'xianyu-media-transfer';
 export const MEDIA_TRANSFER_CHUNK_BYTES = 512 * 1024;
+export const MEDIA_TRANSFER_REQUEST_TIMEOUT_MS = 15_000;
 
 const MEDIA_TRANSFER_TTL_MS = 60_000;
 const ALLOWED_VIDEO_TYPES = new Set(['video/mp4', 'video/quicktime']);
@@ -39,6 +40,11 @@ interface MediaTransferSession {
   nextOffset: number;
   expiresAt: number;
   reading: boolean;
+  expiryTimer: ReturnType<typeof setTimeout>;
+}
+
+export interface ReceiveMediaFileOptions {
+  timeoutMs?: number;
 }
 
 export interface MediaTransferRegistry {
@@ -199,13 +205,39 @@ export function createMediaTransferRegistry(
 ): MediaTransferRegistry {
   const sessions = new Map<string, MediaTransferSession>();
 
+  function deleteSession(sessionId: string): void {
+    const session = sessions.get(sessionId);
+    if (session !== undefined) {
+      clearTimeout(session.expiryTimer);
+      sessions.delete(sessionId);
+    }
+  }
+
+  function scheduleExpiry(sessionId: string, session: MediaTransferSession): void {
+    clearTimeout(session.expiryTimer);
+    session.expiryTimer = setTimeout(
+      () => {
+        const current = sessions.get(sessionId);
+        if (current === undefined) {
+          return;
+        }
+        if (now() >= current.expiresAt) {
+          deleteSession(sessionId);
+          return;
+        }
+        scheduleExpiry(sessionId, current);
+      },
+      Math.max(0, session.expiresAt - now())
+    );
+  }
+
   function activeSession(sessionId: string): MediaTransferSession {
     const session = sessions.get(sessionId);
     if (session === undefined) {
       throw new Error('媒体传输会话不存在');
     }
     if (now() >= session.expiresAt) {
-      sessions.delete(sessionId);
+      deleteSession(sessionId);
       throw new Error('媒体传输会话已过期');
     }
     return session;
@@ -227,7 +259,7 @@ export function createMediaTransferRegistry(
       if (!isNonEmptyBoundedText(sessionId, 200) || sessions.has(sessionId)) {
         throw new Error('无法创建媒体传输会话');
       }
-      sessions.set(sessionId, {
+      const session: MediaTransferSession = {
         assetId,
         tabId,
         fileName: asset.fileName,
@@ -235,8 +267,11 @@ export function createMediaTransferRegistry(
         byteLength: asset.byteLength,
         nextOffset: 0,
         expiresAt: now() + MEDIA_TRANSFER_TTL_MS,
-        reading: false
-      });
+        reading: false,
+        expiryTimer: setTimeout(() => undefined, 0)
+      };
+      sessions.set(sessionId, session);
+      scheduleExpiry(sessionId, session);
       return {
         sessionId,
         fileName: asset.fileName,
@@ -266,13 +301,13 @@ export function createMediaTransferRegistry(
           asset.mimeType !== session.mimeType ||
           asset.byteLength !== session.byteLength
         ) {
-          sessions.delete(sessionId);
+          deleteSession(sessionId);
           throw new Error('媒体传输资源已发生变化');
         }
         const end = Math.min(offset + MEDIA_TRANSFER_CHUNK_BYTES, session.byteLength);
         const bytes = new Uint8Array(await asset.blob.slice(offset, end).arrayBuffer());
         if (bytes.byteLength !== end - offset || bytes.byteLength > MEDIA_TRANSFER_CHUNK_BYTES) {
-          sessions.delete(sessionId);
+          deleteSession(sessionId);
           throw new Error('媒体传输分块大小无效');
         }
         const done = end === session.byteLength;
@@ -283,11 +318,16 @@ export function createMediaTransferRegistry(
           done
         };
         if (done) {
-          sessions.delete(sessionId);
+          deleteSession(sessionId);
         } else {
           session.nextOffset = end;
+          session.expiresAt = now() + MEDIA_TRANSFER_TTL_MS;
+          scheduleExpiry(sessionId, session);
         }
         return chunk;
+      } catch (error) {
+        deleteSession(sessionId);
+        throw error;
       } finally {
         const current = sessions.get(sessionId);
         if (current !== undefined) {
@@ -304,14 +344,14 @@ export function createMediaTransferRegistry(
       if (session.tabId !== tabId) {
         return Promise.reject(new Error('媒体传输目标不匹配'));
       }
-      sessions.delete(sessionId);
+      deleteSession(sessionId);
       return Promise.resolve();
     },
 
     releaseForTab(tabId): void {
       for (const [sessionId, session] of sessions) {
         if (session.tabId === tabId) {
-          sessions.delete(sessionId);
+          deleteSession(sessionId);
         }
       }
     },
@@ -320,7 +360,7 @@ export function createMediaTransferRegistry(
       const currentTime = now();
       for (const [sessionId, session] of sessions) {
         if (currentTime >= session.expiresAt) {
-          sessions.delete(sessionId);
+          deleteSession(sessionId);
         }
       }
     }
@@ -350,55 +390,78 @@ export function isTrustedMediaTransferSender(
 function requestChunk(
   port: MediaTransferClientPort,
   sessionId: string,
-  offset: number
+  offset: number,
+  timeoutMs: number
 ): Promise<MediaTransferChunk> {
   return new Promise((resolve, reject) => {
+    let settled = false;
     const cleanup = () => {
+      clearTimeout(timeout);
       port.onMessage.removeListener(onMessage);
       port.onDisconnect.removeListener(onDisconnect);
+    };
+    const finish = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      callback();
     };
     const onMessage = (value: unknown) => {
       const response = parseMediaTransferServerResponse(value);
       if (response === null) {
-        cleanup();
-        reject(new Error('媒体传输响应格式无效'));
+        finish(() => reject(new Error('媒体传输响应格式无效')));
         return;
       }
       if (response.type === 'ERROR') {
-        cleanup();
-        reject(
-          new Error(
-            response.sessionId === sessionId ? response.message : '媒体传输响应与请求不匹配'
+        finish(() =>
+          reject(
+            new Error(
+              response.sessionId === sessionId
+                ? response.message
+                : '媒体传输响应与请求不匹配'
+            )
           )
         );
         return;
       }
-      cleanup();
-      resolve(response.chunk);
+      finish(() => resolve(response.chunk));
     };
     const onDisconnect = () => {
-      cleanup();
-      reject(new Error('媒体传输连接已关闭'));
+      finish(() => reject(new Error('媒体传输连接已关闭')));
     };
     port.onMessage.addListener(onMessage);
     port.onDisconnect.addListener(onDisconnect);
-    port.postMessage({ type: 'READ', sessionId, offset });
+    const timeout = setTimeout(() => {
+      finish(() => reject(new Error('媒体传输等待响应超时')));
+    }, timeoutMs);
+    try {
+      port.postMessage({ type: 'READ', sessionId, offset });
+    } catch (error) {
+      finish(() => reject(error instanceof Error ? error : new Error('媒体传输请求失败')));
+    }
   });
 }
 
 export async function receiveMediaFile(
   descriptor: MediaTransferDescriptor,
-  connect: () => MediaTransferClientPort
+  connect: () => MediaTransferClientPort,
+  options: ReceiveMediaFileOptions = {}
 ): Promise<File> {
   if (!isMediaTransferDescriptor(descriptor)) {
     throw new Error('媒体传输描述无效');
+  }
+  const timeoutMs = options.timeoutMs ?? MEDIA_TRANSFER_REQUEST_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error('媒体传输超时配置无效');
   }
   const port = connect();
   const parts: ArrayBuffer[] = [];
   let offset = 0;
   try {
     for (;;) {
-      const chunk = await requestChunk(port, descriptor.sessionId, offset);
+      const chunk = await requestChunk(port, descriptor.sessionId, offset, timeoutMs);
       if (chunk.sessionId !== descriptor.sessionId || chunk.offset !== offset) {
         throw new Error('媒体传输响应与请求不匹配');
       }

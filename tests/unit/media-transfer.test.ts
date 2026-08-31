@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { MediaStore, StoredMediaAsset } from '../../src/storage/media-store';
 import {
@@ -39,6 +39,10 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 describe('MediaTransferRegistry', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('会话只允许绑定标签页按顺序读取并在完成后释放', async () => {
     const bytes = new Uint8Array(MEDIA_TRANSFER_CHUNK_BYTES + 3);
     bytes.set([1, 2, 3], MEDIA_TRANSFER_CHUNK_BYTES);
@@ -103,6 +107,22 @@ describe('MediaTransferRegistry', () => {
     await expect(registry.read(descriptor.sessionId, 42, -1)).rejects.toThrow('媒体传输偏移无效');
     now += 61_000;
     await expect(registry.read(descriptor.sessionId, 42, 0)).rejects.toThrow('媒体传输会话已过期');
+    await expect(registry.read(descriptor.sessionId, 42, 0)).rejects.toThrow('媒体传输会话不存在');
+  });
+
+  it('即使没有后续读取也会定时主动释放过期会话', async () => {
+    vi.useFakeTimers();
+    let now = 1_000;
+    const registry = createMediaTransferRegistry(
+      mediaStore(videoAsset(new Uint8Array([1, 2, 3]))),
+      () => now,
+      () => 'session-1'
+    );
+    const descriptor = await registry.create('asset-video', 42);
+
+    now += 60_001;
+    await vi.advanceTimersByTimeAsync(60_001);
+
     await expect(registry.read(descriptor.sessionId, 42, 0)).rejects.toThrow('媒体传输会话不存在');
   });
 
@@ -181,7 +201,17 @@ class FakeClientPort implements MediaTransferClientPort {
   private readonly messageListeners = new Set<(message: unknown) => void>();
   private readonly disconnectListeners = new Set<() => void>();
 
-  constructor(private readonly respond: (request: ReadRequest) => MediaTransferServerResponse) {}
+  constructor(
+    private readonly respond: (request: ReadRequest) => MediaTransferServerResponse | undefined
+  ) {}
+
+  get messageListenerCount(): number {
+    return this.messageListeners.size;
+  }
+
+  get disconnectListenerCount(): number {
+    return this.disconnectListeners.size;
+  }
 
   readonly onMessage = {
     addListener: (listener: (message: unknown) => void) => this.messageListeners.add(listener),
@@ -197,6 +227,9 @@ class FakeClientPort implements MediaTransferClientPort {
     this.requests.push(message);
     if (message.type === 'READ') {
       const response = this.respond(message);
+      if (response === undefined) {
+        return;
+      }
       queueMicrotask(() => {
         for (const listener of this.messageListeners) {
           listener(response);
@@ -214,6 +247,10 @@ class FakeClientPort implements MediaTransferClientPort {
 }
 
 describe('receiveMediaFile', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('一次只请求一个 512 KB 分块并在成功后 CLOSE 与 disconnect', async () => {
     const first = new Uint8Array(MEDIA_TRANSFER_CHUNK_BYTES).fill(1);
     const second = new Uint8Array([2, 3, 4]);
@@ -270,6 +307,37 @@ describe('receiveMediaFile', () => {
 
     await expect(receiveMediaFile(descriptor, () => port)).rejects.toThrow('媒体传输目标不匹配');
     expect(port.requests.at(-1)).toEqual({ type: 'CLOSE', sessionId: 'session-1' });
+    expect(port.disconnected).toBe(true);
+  });
+
+  it('端口既不响应也不断开时有界拒绝并统一清理', async () => {
+    vi.useFakeTimers();
+    const port = new FakeClientPort(() => undefined);
+    const descriptor = {
+      sessionId: 'session-timeout',
+      fileName: 'demo.mp4',
+      mimeType: 'video/mp4' as const,
+      byteLength: 3,
+      chunkBytes: MEDIA_TRANSFER_CHUNK_BYTES
+    };
+
+    const transfer = receiveMediaFile(descriptor, () => port, { timeoutMs: 50 });
+    const guarded = Promise.race([
+      transfer,
+      new Promise<File>((_resolve, reject) => {
+        setTimeout(() => reject(new Error('测试保护超时')), 100);
+      })
+    ]);
+    const rejection = expect(guarded).rejects.toThrow('媒体传输等待响应超时');
+
+    expect(port.messageListenerCount).toBe(1);
+    expect(port.disconnectListenerCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(100);
+    await rejection;
+
+    expect(port.messageListenerCount).toBe(0);
+    expect(port.disconnectListenerCount).toBe(0);
+    expect(port.requests.at(-1)).toEqual({ type: 'CLOSE', sessionId: 'session-timeout' });
     expect(port.disconnected).toBe(true);
   });
 });

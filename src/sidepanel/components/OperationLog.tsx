@@ -38,50 +38,63 @@ function safeHttpUrl(value: string | undefined): string | undefined {
   }
 }
 
-function DraftDetails({ draft }: { draft: OperationDraftSnapshot }) {
-  const sourceUrl = safeHttpUrl(draft.sourceUrl);
+function SafeUrlRow({ label, url }: { label: string; url: string }) {
   const [copyFeedback, setCopyFeedback] = useState('');
 
-  const copySourceUrl = async () => {
-    if (sourceUrl === undefined) {
-      return;
-    }
+  const copyUrl = async () => {
     try {
-      await navigator.clipboard.writeText(sourceUrl);
-      setCopyFeedback('链接已复制');
+      await navigator.clipboard.writeText(url);
+      setCopyFeedback(`${label}已复制`);
     } catch {
-      setCopyFeedback('复制失败，请手动选择链接');
+      setCopyFeedback(`${label}复制失败，请手动选择链接`);
     }
   };
 
-  const openSourceUrl = () => {
-    if (sourceUrl === undefined) {
-      return;
-    }
-    const opened = window.open(sourceUrl, '_blank', 'noopener,noreferrer');
+  const openUrl = () => {
+    const opened = window.open(url, '_blank', 'noopener,noreferrer');
     if (opened !== null) {
       opened.opener = null;
+      setCopyFeedback(`${label}已在新窗口打开`);
+    } else {
+      setCopyFeedback(`无法打开${label}`);
     }
   };
 
   return (
+    <div>
+      <dt>{label}</dt>
+      <dd>
+        <span className="log-details__link">{url}</span>
+        <span className="log-details__link-actions">
+          <button type="button" onClick={() => void copyUrl()}>
+            复制{label}
+          </button>
+          <button type="button" onClick={openUrl}>
+            打开{label}
+          </button>
+        </span>
+        {copyFeedback.length === 0 ? null : <p role="status">{copyFeedback}</p>}
+      </dd>
+    </div>
+  );
+}
+
+function DraftDetails({ draft }: { draft: OperationDraftSnapshot }) {
+  const sourceUrl = safeHttpUrl(draft.sourceUrl);
+  const canonicalUrl = safeHttpUrl(draft.canonicalUrl);
+  const duplicateUrl = sourceUrl !== undefined && sourceUrl === canonicalUrl;
+
+  return (
     <dl className="log-details__fields">
-      {sourceUrl === undefined ? null : (
-        <div>
-          <dt>来源链接</dt>
-          <dd>
-            <span className="log-details__link">{sourceUrl}</span>
-            <span className="log-details__link-actions">
-              <button type="button" onClick={() => void copySourceUrl()}>
-                复制链接
-              </button>
-              <button type="button" onClick={openSourceUrl}>
-                新窗口打开
-              </button>
-            </span>
-            {copyFeedback.length === 0 ? null : <p role="status">{copyFeedback}</p>}
-          </dd>
-        </div>
+      {duplicateUrl ? (
+        <SafeUrlRow label="提交链接与最终规范链接" url={sourceUrl} />
+      ) : (
+        <>
+          {sourceUrl === undefined ? null : <SafeUrlRow label="提交链接" url={sourceUrl} />}
+          {canonicalUrl === undefined ? null : (
+            <SafeUrlRow label="最终规范链接" url={canonicalUrl} />
+          )}
+        </>
       )}
       {draft.title === undefined ? null : (
         <div>

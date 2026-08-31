@@ -117,6 +117,27 @@ describe('sanitizeLogEntry', () => {
       /blob:|asset-secret|auth-secret|\/Users\/mint|data:image|cHJpdmF0ZS1iaW5hcnk/u
     );
   });
+
+  it('防御清理警告中裸露的 local UUID 和 assetId', () => {
+    const assetId = '8f14e45f-ea47-4b3f-a30b-9f12e7d6c421';
+    const sanitized = sanitizeLogEntry({
+      id: 'log-raw-media-id',
+      timestamp: '2026-08-31T14:00:00.000Z',
+      stage: 'fill',
+      outcome: 'warning',
+      message: '图片处理完成',
+      details: {
+        warnings: [
+          `local-${assetId}：本地图片不存在`,
+          `asset-${assetId}：读取失败`
+        ]
+      }
+    });
+
+    const serialized = JSON.stringify(sanitized);
+    expect(serialized).not.toContain(assetId);
+    expect(serialized).not.toContain(`local-${assetId}`);
+  });
 });
 
 describe('appendOperationLog', () => {

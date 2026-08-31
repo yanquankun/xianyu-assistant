@@ -110,6 +110,14 @@ function sanitizeText(value: string, maximum = MAX_LOG_TEXT_LENGTH): string {
     .replace(/\b(?:api[_ -]?key|x-api-key)\s*[:=]\s*[^\s,;]+/giu, 'apiKey=[已脱敏]')
     .replace(/\basset[_ -]?id\s*[:=]\s*[^\s,;]+/giu, 'assetId=[已脱敏]')
     .replace(
+      /\b(?:local|asset)-[a-z0-9][a-z0-9-]{5,}\b/giu,
+      '[资源标识已脱敏]'
+    )
+    .replace(
+      /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/giu,
+      '[资源标识已脱敏]'
+    )
+    .replace(
       /\b(?:set-)?cookie\s*:\s*.*?(?=\s+https?:\/\/|$)/giu,
       'Cookie: [已脱敏]'
     )

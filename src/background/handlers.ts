@@ -25,7 +25,12 @@ import type { ParsedProduct, ProductDraft } from '../domain/product';
 import { createLocalStore, type StorageAreaLike } from '../storage/local-store';
 import { createMediaStore } from '../storage/media-store';
 import type { OperationLogEntry } from '../storage/operation-log';
-import { parseXianyuFillResult, prepareSelectedImages, type FillResult } from '../xianyu/fill';
+import {
+  formatImageDownloadFailureWarning,
+  parseXianyuFillResult,
+  prepareSelectedImages,
+  type FillResult
+} from '../xianyu/fill';
 import {
   MEDIA_TRANSFER_PORT_NAME,
   createMediaTransferRegistry,
@@ -392,7 +397,7 @@ async function fillDraft(draft: ProductDraft): Promise<FillResult> {
     const skipped = [...fillResult.value.skipped];
     const warnings = [
       ...fillResult.value.warnings,
-      ...downloaded.failures.map((failure) => `${failure.id}：${failure.message}`)
+      ...downloaded.failures.map(formatImageDownloadFailureWarning)
     ];
     if (videoFailure !== undefined) {
       skipped.push({ field: 'video', reason: `${videoFailure}，请在闲鱼页面手动上传视频` });
