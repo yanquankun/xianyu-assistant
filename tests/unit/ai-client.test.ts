@@ -1,0 +1,150 @@
+import { describe, expect, it } from 'vitest';
+
+import type { ProductDraft } from '../../src/domain/product';
+import type { AiSettings } from '../../src/domain/settings';
+import {
+  createAiClient,
+  normalizeChatCompletionsUrl
+} from '../../src/ai/client';
+
+const settings: AiSettings = {
+  baseUrl: 'https://api.example.com/v1/',
+  apiKey: 'secret-key',
+  model: 'gpt-test',
+  temperature: 0.3,
+  systemInstruction: ''
+};
+
+const draft: ProductDraft = {
+  id: 'draft-ai',
+  platform: 'taobao',
+  canonicalUrl: 'https://item.taobao.com/item.htm?id=1',
+  source: {
+    title: '原始标题',
+    description: '原始描述',
+    price: 99,
+    currency: 'CNY'
+  },
+  title: '当前标题',
+  description: '原始描述',
+  price: 99,
+  currency: 'CNY',
+  images: [],
+  warnings: [],
+  confidence: 'high',
+  shippingMethod: '包邮',
+  categoryNote: '',
+  updatedAt: '2026-08-31T10:00:00.000Z'
+};
+
+function chatResponse(content: string, status = 200): Response {
+  return new Response(
+    JSON.stringify({
+      id: 'chatcmpl-test',
+      object: 'chat.completion',
+      created: 1,
+      model: 'gpt-test',
+      choices: [
+        {
+          index: 0,
+          finish_reason: 'stop',
+          message: { role: 'assistant', content }
+        }
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 }
+    }),
+    { status, headers: { 'content-type': 'application/json' } }
+  );
+}
+
+describe('normalizeChatCompletionsUrl', () => {
+  it('把 v1 Base URL 规范为 Chat Completions 地址', () => {
+    expect(normalizeChatCompletionsUrl('https://api.example.com/v1/').href).toBe(
+      'https://api.example.com/v1/chat/completions'
+    );
+  });
+
+  it('已经是 Chat Completions 地址时不重复追加', () => {
+    expect(normalizeChatCompletionsUrl('https://api.example.com/v1/chat/completions').href).toBe(
+      'https://api.example.com/v1/chat/completions'
+    );
+  });
+
+  it('拒绝非 HTTP 接口地址', () => {
+    expect(() => normalizeChatCompletionsUrl('file:///tmp/api')).toThrow(
+      'AI Base URL 仅支持 HTTP 或 HTTPS'
+    );
+  });
+});
+
+describe('createAiClient', () => {
+  it('使用 Bearer Key 和配置模型发送 OpenAI 兼容请求', async () => {
+    const requests: { url: string; init: RequestInit }[] = [];
+    const client = createAiClient((input, init) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url;
+      requests.push({ url, init: init ?? {} });
+      return Promise.resolve(
+        chatResponse('{"title":"扩写标题","description":"扩写描述","warnings":[]}')
+      );
+    });
+
+    const result = await client.expandDraft(settings, draft);
+
+    expect(result.title).toBe('扩写标题');
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url).toBe('https://api.example.com/v1/chat/completions');
+    expect(requests[0]?.init.headers).toEqual({
+      Authorization: 'Bearer secret-key',
+      'Content-Type': 'application/json'
+    });
+    const requestBody = requests[0]?.init.body;
+    if (typeof requestBody !== 'string') {
+      throw new Error('测试需要 JSON 字符串请求体');
+    }
+    const body = JSON.parse(requestBody) as Record<string, unknown>;
+    expect(body.model).toBe('gpt-test');
+    expect(body.temperature).toBe(0.3);
+    expect(body.response_format).toEqual({ type: 'json_object' });
+  });
+
+  it('AI 返回无效 JSON 时保留原草稿', async () => {
+    const client = createAiClient(() => Promise.resolve(chatResponse('not-json')));
+
+    await expect(client.expandDraft(settings, draft)).rejects.toMatchObject({
+      code: 'AI_INVALID_RESPONSE'
+    });
+    expect(draft.description).toBe('原始描述');
+  });
+
+  it.each([
+    [401, 'AI_UNAUTHORIZED'],
+    [429, 'AI_RATE_LIMITED'],
+    [503, 'AI_NETWORK_ERROR']
+  ] as const)('HTTP %s 转换为 %s', async (status, code) => {
+    const client = createAiClient(() => Promise.resolve(chatResponse('{}', status)));
+
+    await expect(client.testConnection(settings)).rejects.toMatchObject({ code });
+  });
+
+  it('网络异常转换为可恢复错误且不暴露 API Key', async () => {
+    const client = createAiClient(() => Promise.reject(new Error('request secret-key failed')));
+
+    const operation = client.testConnection(settings);
+
+    await expect(operation).rejects.toMatchObject({ code: 'AI_NETWORK_ERROR' });
+    try {
+      await operation;
+      throw new Error('测试需要网络错误');
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      if (error instanceof Error) {
+        expect(error.message).not.toContain('secret-key');
+      }
+    }
+  });
+});
