@@ -120,6 +120,45 @@
   vertical-align: -0.0625rem;
 }
 
+.editor-heading-actions,
+.confirm-dialog__actions {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.confirm-dialog-backdrop {
+  align-items: center;
+  background: rgb(15 23 42 / 72%);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 1rem;
+  position: fixed;
+  z-index: 11;
+}
+
+.confirm-dialog {
+  background: #fff;
+  border-radius: 0.75rem;
+  box-shadow: 0 1rem 3rem rgb(15 23 42 / 35%);
+  inline-size: min(100%, 26rem);
+  padding: 1rem;
+}
+
+.confirm-dialog h2 {
+  margin-block: 0;
+}
+
+.confirm-dialog p {
+  color: var(--muted, #71757a);
+  line-height: 1.5;
+}
+
+.confirm-dialog__actions {
+  justify-content: flex-end;
+}
+
 @keyframes media-preview-spin {
   to {
     transform: rotate(1turn);

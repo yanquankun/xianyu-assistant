@@ -122,6 +122,10 @@ export function createBrowserSidePanelServices(): SidePanelServices {
       return store.saveDraft(draft);
     },
 
+    clearDraft(): Promise<void> {
+      return store.clearDraft();
+    },
+
     saveMedia(file, kind) {
       return mediaStore.save(file, kind);
     },

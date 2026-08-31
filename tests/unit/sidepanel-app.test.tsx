@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ParsedProduct, ProductDraft } from '../../src/domain/product';
 import type { XianyuLoginCheckResult } from '../../src/xianyu/login';
+import type { FillResult } from '../../src/xianyu/fill';
 import { App, type SidePanelServices } from '../../src/sidepanel/App';
 
 const parsedProduct: ParsedProduct = {
@@ -64,6 +65,7 @@ function createServices(overrides: Partial<SidePanelServices> = {}): SidePanelSe
     saveSettings: () => Promise.resolve(),
     loadDraft: () => Promise.resolve(null),
     saveDraft: () => Promise.resolve(),
+    clearDraft: () => Promise.resolve(),
     saveMedia: (file, kind) =>
       Promise.resolve({
         assetId: `asset-${file.name}`,
@@ -235,7 +237,115 @@ describe('App', () => {
     expect(await screen.findByDisplayValue('测试商品')).toBeVisible();
     expect(screen.getByDisplayValue('测试描述')).toBeVisible();
     expect(screen.getByDisplayValue('99')).toBeVisible();
-    expect(screen.getByText('高')).toBeVisible();
+    expect(screen.getByText('02')).toBeVisible();
+    expect(screen.queryByText('高')).toBeNull();
+  });
+
+  it('空白手动草稿返回初始双入口并清除持久化草稿', async () => {
+    let cleared = 0;
+    render(
+      <App
+        services={createServices({
+          clearDraft: () => {
+            cleared += 1;
+            return Promise.resolve();
+          }
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '手动填写' }));
+    expect(await screen.findByText('02')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: '返回选择方式' }));
+
+    await waitFor(() => expect(cleared).toBe(1));
+    expect(screen.getByRole('button', { name: '解析商品' })).toBeVisible();
+    expect(screen.getByRole('button', { name: '手动填写' })).toBeVisible();
+    expect(screen.queryByLabelText('商品标题')).toBeNull();
+    expect(screen.getByLabelText('商品链接')).toHaveFocus();
+  });
+
+  it('等待已入队草稿保存后才清除持久化草稿', async () => {
+    const save = createDeferred<undefined>();
+    const calls: string[] = [];
+    render(
+      <App
+        services={createServices({
+          saveDraft: () => {
+            calls.push('save');
+            return save.promise;
+          },
+          clearDraft: () => {
+            calls.push('clear');
+            return Promise.resolve();
+          }
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '手动填写' }));
+    await waitFor(() => expect(calls).toEqual(['save']));
+    fireEvent.click(screen.getByRole('button', { name: '返回选择方式' }));
+    expect(calls).toEqual(['save']);
+
+    save.resolve(undefined);
+    await waitFor(() => expect(calls).toEqual(['save', 'clear']));
+  });
+
+  it('非空草稿取消返回确认后保留编辑内容', async () => {
+    render(<App services={createServices()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '手动填写' }));
+    const title = await screen.findByLabelText('商品标题');
+    fireEvent.change(title, { target: { value: '不能误删的标题' } });
+    fireEvent.click(screen.getByRole('button', { name: '返回选择方式' }));
+
+    expect(screen.getByRole('dialog', { name: '返回选择方式' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(screen.getByDisplayValue('不能误删的标题')).toBeVisible();
+  });
+
+  it('草稿删除失败时保留编辑内容并显示清除错误', async () => {
+    render(
+      <App
+        services={createServices({
+          clearDraft: () => Promise.reject(new Error('存储不可用'))
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '手动填写' }));
+    fireEvent.change(await screen.findByLabelText('商品标题'), { target: { value: '保留的标题' } });
+    fireEvent.click(screen.getByRole('button', { name: '返回选择方式' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认返回' }));
+
+    expect(await screen.findByText('草稿清除失败：存储不可用')).toBeVisible();
+    expect(screen.getByDisplayValue('保留的标题')).toBeVisible();
+  });
+
+  it('返回后丢弃迟到的填表完成结果', async () => {
+    const fill = createDeferred<FillResult>();
+    render(
+      <App
+        services={createServices({
+          loadDraft: () => Promise.resolve(readyDraft),
+          checkXianyuLogin: () => Promise.resolve({ state: 'logged-in', message: '闲鱼已登录' }),
+          fillDraft: () => fill.promise
+        })}
+      />
+    );
+
+    const fillButton = await screen.findByRole('button', { name: '填入闲鱼' });
+    fireEvent.load(screen.getByRole('img', { name: '商品图片 1' }));
+    await waitFor(() => expect(fillButton).toBeEnabled());
+    fireEvent.click(fillButton);
+    fireEvent.click(screen.getByRole('button', { name: '返回选择方式' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认返回' }));
+    expect(await screen.findByRole('button', { name: '手动填写' })).toBeVisible();
+
+    fill.resolve({ filled: [], skipped: [], warnings: [] });
+    await waitFor(() => expect(screen.queryByLabelText('商品标题')).toBeNull());
+    expect(screen.queryByText('内容已填入闲鱼，请检查页面并手动发布')).toBeNull();
   });
 
   it('Chrome 侧栏在左侧时显示位置说明', async () => {

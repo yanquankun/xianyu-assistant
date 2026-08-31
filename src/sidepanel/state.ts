@@ -51,8 +51,10 @@ export type WorkflowAction =
     }
   | { type: 'EXPANSION_FAILED'; draftId: string; draftUpdatedAt: string; message: string }
   | { type: 'LOGIN_STATE_CHANGED'; loginState: XianyuLoginState }
-  | { type: 'FILL_STARTED' }
-  | { type: 'FILL_FINISHED'; message: string }
+  | { type: 'FILL_STARTED'; operationId: string }
+  | { type: 'FILL_FINISHED'; operationId: string; message: string }
+  | { type: 'FILL_FAILED'; operationId: string; message: string }
+  | { type: 'WORKFLOW_RESET' }
   | { type: 'OPERATION_FAILED'; message: string };
 
 export const initialWorkflowState: WorkflowState = {
@@ -115,6 +117,20 @@ export function createManualDraft(id: string, now: string): ProductDraft {
     categoryNote: '',
     updatedAt: now
   };
+}
+
+export function draftNeedsResetConfirmation(draft: ProductDraft): boolean {
+  return (
+    draft.title.trim().length > 0 ||
+    draft.description.trim().length > 0 ||
+    draft.price !== null ||
+    draft.originalPrice !== undefined ||
+    draft.shippingMethod !== '包邮' ||
+    draft.categoryNote.trim().length > 0 ||
+    draft.canonicalUrl.trim().length > 0 ||
+    draft.images.length > 0 ||
+    draft.video !== undefined
+  );
 }
 
 export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): WorkflowState {
@@ -356,9 +372,46 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
     case 'LOGIN_STATE_CHANGED':
       return { ...state, loginState: action.loginState };
     case 'FILL_STARTED':
-      return { ...state, phase: 'filling', statusMessage: '正在填入闲鱼页面', errorMessage: null };
+      return {
+        ...state,
+        phase: 'filling',
+        activeOperationId: action.operationId,
+        statusMessage: '正在填入闲鱼页面',
+        errorMessage: null
+      };
     case 'FILL_FINISHED':
-      return { ...state, phase: 'editing', statusMessage: action.message, errorMessage: null };
+      if (state.activeOperationId !== action.operationId) {
+        return state;
+      }
+      return {
+        ...state,
+        phase: 'editing',
+        activeOperationId: null,
+        statusMessage: action.message,
+        errorMessage: null
+      };
+    case 'FILL_FAILED':
+      if (state.activeOperationId !== action.operationId) {
+        return state;
+      }
+      return {
+        ...state,
+        phase: 'error',
+        activeOperationId: null,
+        errorMessage: action.message,
+        statusMessage: '操作未完成'
+      };
+    case 'WORKFLOW_RESET':
+      return {
+        ...state,
+        phase: 'idle',
+        activeOperationId: null,
+        sourceUrl: '',
+        draft: null,
+        expansionTarget: null,
+        statusMessage: '粘贴淘宝或京东商品链接开始整理',
+        errorMessage: null
+      };
     case 'OPERATION_FAILED':
       return {
         ...state,

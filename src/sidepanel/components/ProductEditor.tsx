@@ -12,18 +12,13 @@ interface ProductEditorProps {
   onUploadVideo: (file: File) => void;
   onRemoveImage: (id: string) => void;
   onRemoveVideo: () => void;
+  onReturnToStart: () => void;
 }
 
 const PLATFORM_LABELS: Record<ProductDraft['platform'], string> = {
   taobao: '淘宝来源',
   jd: '京东来源',
   generic: '其他来源'
-};
-
-const CONFIDENCE_LABELS: Record<ProductDraft['confidence'], string> = {
-  high: '高',
-  medium: '中',
-  low: '低'
 };
 
 export function ProductEditor({
@@ -35,7 +30,8 @@ export function ProductEditor({
   onUploadImages,
   onUploadVideo,
   onRemoveImage,
-  onRemoveVideo
+  onRemoveVideo,
+  onReturnToStart
 }: ProductEditorProps) {
   const update = (changes: Partial<ProductDraft>) => {
     onChange({ ...draft, ...changes, updatedAt: new Date().toISOString() });
@@ -61,9 +57,12 @@ export function ProductEditor({
           </span>
           <h2>编辑发布内容</h2>
         </div>
-        <span className={`confidence confidence--${draft.confidence}`}>
-          {CONFIDENCE_LABELS[draft.confidence]}
-        </span>
+        <div className="editor-heading-actions">
+          <button className="button button--quiet" type="button" onClick={onReturnToStart}>
+            返回选择方式
+          </button>
+          <span className="step-number">02</span>
+        </div>
       </div>
 
       <label className="field">

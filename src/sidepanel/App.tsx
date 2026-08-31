@@ -22,10 +22,17 @@ import {
   type XianyuLoginCheckResult
 } from '../xianyu/login';
 import { AiSettingsForm } from './components/AiSettingsForm';
+import { ConfirmDialog } from './components/ConfirmDialog';
 import { LoginBanner } from './components/LoginBanner';
 import { OperationLog } from './components/OperationLog';
 import { ProductEditor } from './components/ProductEditor';
-import { createManualDraft, initialWorkflowState, reduceWorkflow, type PanelView } from './state';
+import {
+  createManualDraft,
+  draftNeedsResetConfirmation,
+  initialWorkflowState,
+  reduceWorkflow,
+  type PanelView
+} from './state';
 
 export type PanelSide = 'left' | 'right' | 'unknown';
 
@@ -34,6 +41,7 @@ export interface SidePanelServices {
   saveSettings(settings: AiSettings): Promise<void>;
   loadDraft(): Promise<ProductDraft | null>;
   saveDraft(draft: ProductDraft): Promise<void>;
+  clearDraft(): Promise<void>;
   saveMedia(file: File, kind: StoredMediaKind): Promise<StoredMediaMetadata>;
   loadMedia(assetId: string): Promise<StoredMediaAsset | null>;
   deleteMedia(assetId: string): Promise<void>;
@@ -80,8 +88,13 @@ export function App({ services }: { services: SidePanelServices }) {
   const [isLoginRefreshing, setIsLoginRefreshing] = useState(false);
   const [logs, setLogs] = useState<OperationLogEntry[]>([]);
   const [panelSide, setPanelSide] = useState<PanelSide>('unknown');
+  const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const draftSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const latestDraftRef = useRef<ProductDraft | null>(null);
+  const sourceInputRef = useRef<HTMLInputElement>(null);
+  const focusSourceAfterResetRef = useRef(false);
+  const workflowGenerationRef = useRef(0);
   const imageUploadRequestRef = useRef(0);
   const videoUploadRequestRef = useRef(0);
   const loginCheckRequestRef = useRef(0);
@@ -116,6 +129,13 @@ export function App({ services }: { services: SidePanelServices }) {
 
   useEffect(() => {
     latestDraftRef.current = state.draft;
+  }, [state.draft]);
+
+  useEffect(() => {
+    if (state.draft === null && focusSourceAfterResetRef.current) {
+      focusSourceAfterResetRef.current = false;
+      sourceInputRef.current?.focus();
+    }
   }, [state.draft]);
 
   useEffect(() => {
@@ -195,9 +215,13 @@ export function App({ services }: { services: SidePanelServices }) {
     imageUploadRequestRef.current += 1;
     videoUploadRequestRef.current += 1;
     const id = operationId();
+    const workflowGeneration = workflowGenerationRef.current;
     dispatch({ type: 'PARSE_STARTED', operationId: id, url: state.sourceUrl });
     try {
       const product = await services.parseProduct(state.sourceUrl);
+      if (workflowGeneration !== workflowGenerationRef.current) {
+        return;
+      }
       dispatch({
         type: 'PARSE_SUCCEEDED',
         operationId: id,
@@ -205,6 +229,9 @@ export function App({ services }: { services: SidePanelServices }) {
         now: new Date().toISOString()
       });
     } catch (error) {
+      if (workflowGeneration !== workflowGenerationRef.current) {
+        return;
+      }
       dispatch({ type: 'PARSE_FAILED', operationId: id, message: errorMessage(error) });
     }
   };
@@ -216,9 +243,13 @@ export function App({ services }: { services: SidePanelServices }) {
     const draft = state.draft;
     const draftId = draft.id;
     const draftUpdatedAt = draft.updatedAt;
+    const workflowGeneration = workflowGenerationRef.current;
     dispatch({ type: 'EXPANSION_STARTED', draftId, draftUpdatedAt });
     try {
       const preview = await services.expandDraft(settings, draft);
+      if (workflowGeneration !== workflowGenerationRef.current) {
+        return;
+      }
       dispatch({
         type: 'EXPANSION_RECEIVED',
         draftId,
@@ -227,6 +258,9 @@ export function App({ services }: { services: SidePanelServices }) {
         now: new Date().toISOString()
       });
     } catch (error) {
+      if (workflowGeneration !== workflowGenerationRef.current) {
+        return;
+      }
       dispatch({
         type: 'EXPANSION_FAILED',
         draftId,
@@ -240,12 +274,18 @@ export function App({ services }: { services: SidePanelServices }) {
     if (state.draft === null) {
       return;
     }
-    dispatch({ type: 'FILL_STARTED' });
+    const id = operationId();
+    const workflowGeneration = workflowGenerationRef.current;
+    dispatch({ type: 'FILL_STARTED', operationId: id });
     try {
       const result = await services.fillDraft(state.draft);
+      if (workflowGeneration !== workflowGenerationRef.current) {
+        return;
+      }
       const skipped = result.skipped.length;
       dispatch({
         type: 'FILL_FINISHED',
+        operationId: id,
         message:
           skipped === 0
             ? '内容已填入闲鱼，请检查页面并手动发布'
@@ -254,7 +294,10 @@ export function App({ services }: { services: SidePanelServices }) {
       dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: 'logged-in' });
       setLoginMessage('闲鱼已登录');
     } catch (error) {
-      dispatch({ type: 'OPERATION_FAILED', message: errorMessage(error) });
+      if (workflowGeneration !== workflowGenerationRef.current) {
+        return;
+      }
+      dispatch({ type: 'FILL_FAILED', operationId: id, message: errorMessage(error) });
       await checkXianyuLogin(false);
     }
   };
@@ -285,6 +328,56 @@ export function App({ services }: { services: SidePanelServices }) {
   const createManualEntry = () => {
     const draft = createManualDraft(operationId(), new Date().toISOString());
     dispatch({ type: 'DRAFT_RESTORED', draft });
+  };
+
+  const resetWorkflow = async () => {
+    const draft = latestDraftRef.current;
+    if (draft === null || isResetting) {
+      return;
+    }
+    const localAssetIds = getLocalAssetIds(draft);
+    setIsResetting(true);
+    try {
+      await draftSaveQueue.current;
+      await services.clearDraft();
+      workflowGenerationRef.current += 1;
+      imageUploadRequestRef.current += 1;
+      videoUploadRequestRef.current += 1;
+      loginCheckRequestRef.current += 1;
+      focusSourceAfterResetRef.current = true;
+      dispatch({ type: 'WORKFLOW_RESET' });
+      setIsResetDialogOpen(false);
+      for (const assetId of localAssetIds) {
+        try {
+          await services.deleteMedia(assetId);
+          pendingMediaAssetIdsRef.current.delete(assetId);
+        } catch {
+          // Cleanup runs after every draft save and on side panel initialization.
+        }
+      }
+      try {
+        await services.cleanupMedia([]);
+      } catch {
+        // A future bounded cleanup retries orphaned media without restoring the deleted draft.
+      }
+    } catch (error) {
+      setIsResetDialogOpen(false);
+      dispatch({ type: 'OPERATION_FAILED', message: `草稿清除失败：${errorMessage(error)}` });
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
+  const returnToStart = () => {
+    const draft = latestDraftRef.current;
+    if (draft === null) {
+      return;
+    }
+    if (draftNeedsResetConfirmation(draft)) {
+      setIsResetDialogOpen(true);
+      return;
+    }
+    void resetWorkflow();
   };
 
   const uploadImages = async (files: readonly File[]) => {
@@ -512,6 +605,7 @@ export function App({ services }: { services: SidePanelServices }) {
                 <label htmlFor="source-url">商品链接</label>
                 <div className="input-action">
                   <input
+                    ref={sourceInputRef}
                     id="source-url"
                     type="url"
                     value={state.sourceUrl}
@@ -562,6 +656,7 @@ export function App({ services }: { services: SidePanelServices }) {
                 onUploadVideo={(file) => void uploadVideo(file)}
                 onRemoveImage={(id) => void removeImage(id)}
                 onRemoveVideo={() => void removeVideo()}
+                onReturnToStart={returnToStart}
               />
             )}
 
@@ -580,6 +675,18 @@ export function App({ services }: { services: SidePanelServices }) {
 
         {state.activeView === 'logs' ? <OperationLog entries={logs} /> : null}
       </main>
+
+      {isResetDialogOpen ? (
+        <ConfirmDialog
+          title="返回选择方式"
+          description="当前草稿和本地上传的媒体将被删除，运行记录和 AI 配置会保留。"
+          cancelLabel="取消"
+          confirmLabel="确认返回"
+          isConfirming={isResetting}
+          onCancel={() => setIsResetDialogOpen(false)}
+          onConfirm={() => void resetWorkflow()}
+        />
+      ) : null}
 
       <footer className="action-dock">
         <p>最终发布需在闲鱼页面手动完成</p>

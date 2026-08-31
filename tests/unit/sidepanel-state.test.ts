@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ParsedProduct, ProductDraft } from '../../src/domain/product';
-import { createManualDraft, initialWorkflowState, reduceWorkflow } from '../../src/sidepanel/state';
+import {
+  createManualDraft,
+  draftNeedsResetConfirmation,
+  initialWorkflowState,
+  reduceWorkflow
+} from '../../src/sidepanel/state';
 
 const parsedProduct: ParsedProduct = {
   platform: 'jd',
@@ -38,6 +43,106 @@ const draft: ProductDraft = {
 };
 
 describe('reduceWorkflow', () => {
+  it('仅当草稿没有用户内容或来源时允许直接返回', () => {
+    expect(draftNeedsResetConfirmation(createManualDraft('manual-1', '2026-08-31T12:00:00.000Z'))).toBe(false);
+
+    const changedFields: ProductDraft[] = [
+      { ...draft, title: '标题' },
+      { ...draft, description: '描述' },
+      { ...draft, price: 1 },
+      { ...draft, originalPrice: 2 },
+      { ...draft, shippingMethod: '邮费另议' },
+      { ...draft, categoryNote: '分类备注' },
+      { ...draft, canonicalUrl: 'https://item.jd.com/2.html' },
+      {
+        ...draft,
+        images: [
+          {
+            id: 'local-image',
+            location: {
+              kind: 'local',
+              assetId: 'asset-1',
+              fileName: 'image.png',
+              mimeType: 'image/png',
+              byteLength: 1
+            },
+            selected: true,
+            loadStatus: 'loaded'
+          }
+        ]
+      },
+      {
+        ...draft,
+        video: {
+          id: 'local-video',
+          assetId: 'asset-video',
+          fileName: 'video.mp4',
+          mimeType: 'video/mp4',
+          byteLength: 1
+        }
+      }
+    ];
+
+    for (const changedDraft of changedFields) {
+      expect(draftNeedsResetConfirmation(changedDraft)).toBe(true);
+    }
+  });
+
+  it('重置只清空商品工作流并使迟到异步结果失效', () => {
+    const filling = {
+      ...initialWorkflowState,
+      phase: 'filling' as const,
+      activeView: 'logs' as const,
+      activeOperationId: 'fill-1',
+      sourceUrl: 'https://item.jd.com/1.html',
+      draft,
+      expansionTarget: { draftId: draft.id, draftUpdatedAt: draft.updatedAt },
+      loginState: 'logged-in' as const,
+      errorMessage: '旧错误'
+    };
+
+    const reset = reduceWorkflow(filling, { type: 'WORKFLOW_RESET' });
+    expect(reset).toMatchObject({
+      phase: 'idle',
+      activeView: 'logs',
+      activeOperationId: null,
+      sourceUrl: '',
+      draft: null,
+      expansionTarget: null,
+      loginState: 'logged-in',
+      errorMessage: null,
+      statusMessage: '粘贴淘宝或京东商品链接开始整理'
+    });
+    expect(reduceWorkflow(reset, {
+      type: 'FILL_FINISHED',
+      operationId: 'fill-1',
+      message: '迟到完成'
+    })).toBe(reset);
+
+    expect(
+      reduceWorkflow(reset, {
+        type: 'PARSE_SUCCEEDED',
+        operationId: 'fill-1',
+        product: parsedProduct,
+        now: '2026-08-31T12:30:00.000Z'
+      })
+    ).toBe(reset);
+
+    expect(
+      reduceWorkflow(reset, {
+        type: 'EXPANSION_RECEIVED',
+        draftId: draft.id,
+        draftUpdatedAt: draft.updatedAt,
+        preview: {
+          title: '迟到扩写标题',
+          description: '迟到扩写描述',
+          warnings: [],
+          factWarnings: []
+        },
+        now: '2026-08-31T12:30:00.000Z'
+      })
+    ).toBe(reset);
+  });
   it('可以直接创建手动草稿用于输入和 AI 扩写', () => {
     const draft = createManualDraft('manual-1', '2026-08-31T12:00:00.000Z');
     const state = reduceWorkflow(initialWorkflowState, { type: 'DRAFT_RESTORED', draft });
