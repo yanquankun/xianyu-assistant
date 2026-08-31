@@ -53,22 +53,24 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       });
       request.on('end', () => {
         requests.push(body);
-        response.writeHead(200, { 'Content-Type': 'application/json' });
-        response.end(
-          JSON.stringify({
-            choices: [
-              {
-                message: {
-                  content: JSON.stringify({
-                    title: 'AI 整理后的测试商品',
-                    description: '商品信息已整理，请以当前页面和实物为准。',
-                    warnings: []
-                  })
+        setTimeout(() => {
+          response.writeHead(200, { 'Content-Type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      title: 'AI 整理后的测试商品',
+                      description: '商品信息已整理，请以当前页面和实物为准。',
+                      warnings: []
+                    })
+                  }
                 }
-              }
-            ]
-          })
-        );
+              ]
+            })
+          );
+        }, 150);
       });
       return;
     }

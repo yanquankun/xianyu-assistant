@@ -20,7 +20,16 @@ export default defineConfig({
     host_permissions: [
       'https://www.goofish.com/*',
       ...(mode === 'e2e'
-        ? ['https://item.taobao.com/*', 'https://item.jd.com/*', 'http://127.0.0.1/*']
+        ? [
+            'https://item.taobao.com/*',
+            'https://item.jd.com/*',
+            'https://3.cn/*',
+            'https://*.jd.com/*',
+            'https://e.tb.cn/*',
+            'https://*.taobao.com/*',
+            'https://*.tmall.com/*',
+            'http://127.0.0.1/*'
+          ]
         : [])
     ],
     optional_host_permissions: ['https://*/*', 'http://*/*'],
