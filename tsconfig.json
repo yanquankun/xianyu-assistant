@@ -1,0 +1,21 @@
+{
+  "extends": "./.wxt/tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "useUnknownInCatchVariables": true
+  },
+  "include": [
+    ".wxt/wxt.d.ts",
+    ".wxt/types/**/*.d.ts",
+    "entrypoints/**/*.ts",
+    "entrypoints/**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "*.config.ts"
+  ]
+}

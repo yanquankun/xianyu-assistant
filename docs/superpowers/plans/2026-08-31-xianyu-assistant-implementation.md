@@ -6,7 +6,7 @@
 
 **架构：** 使用 WXT、React 和 TypeScript。Side Panel 负责编辑与反馈，Background Service Worker 负责权限、标签页和 AI 调用，商品解析脚本与闲鱼填写脚本分别隔离；共享领域模型负责跨上下文消息、草稿和错误类型。
 
-**技术栈：** Node.js 24、pnpm 11、WXT 0.21.4、React 19.2.8、TypeScript 7.0.2、Vitest 4.1.11、Playwright 1.62.1、ESLint 10.9.1、Prettier 3.9.6。
+**技术栈：** Node.js 24、pnpm 11、WXT 0.21.4、React 19.2.8、TypeScript 6.0.3、Vitest 4.1.11、Playwright 1.62.1、ESLint 10.9.1、Prettier 3.9.6。
 
 **规格：** `docs/superpowers/specs/2026-08-31-xianyu-assistant-design.md`
 
