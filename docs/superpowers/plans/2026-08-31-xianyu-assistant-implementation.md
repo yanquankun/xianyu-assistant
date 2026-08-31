@@ -424,7 +424,7 @@ xianyu-assistant/
 
 **接口：**
 - 产出：`fillXianyuDraft(document, payload): FillResult`。
-- 产出：`downloadSelectedImages(fetchImpl, images): Promise<TransferableImage[]>`。
+- 产出：`downloadSelectedImages(fetchImpl, images): Promise<ImageDownloadResult>`，分别返回可上传文件与逐图失败原因。
 - 产出：消息 `CHECK_XIANYU_LOGIN` 与 `FILL_XIANYU_DRAFT`。
 - 禁止产出任何 `PUBLISH`、`CLICK_PUBLISH`、`submitListing` 或等价接口。
 
