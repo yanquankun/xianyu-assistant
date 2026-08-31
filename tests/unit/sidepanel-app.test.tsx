@@ -66,6 +66,7 @@ describe('App', () => {
     expect(await screen.findByDisplayValue('测试商品')).toBeVisible();
     expect(screen.getByDisplayValue('测试描述')).toBeVisible();
     expect(screen.getByDisplayValue('99')).toBeVisible();
+    expect(screen.getByText('高')).toBeVisible();
   });
 
   it('Chrome 侧栏在左侧时显示位置说明', async () => {

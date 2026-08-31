@@ -6,6 +6,18 @@ interface ProductEditorProps {
   onChange: (draft: ProductDraft) => void;
 }
 
+const PLATFORM_LABELS: Record<ProductDraft['platform'], string> = {
+  taobao: '淘宝来源',
+  jd: '京东来源',
+  generic: '其他来源'
+};
+
+const CONFIDENCE_LABELS: Record<ProductDraft['confidence'], string> = {
+  high: '高',
+  medium: '中',
+  low: '低'
+};
+
 export function ProductEditor({ draft, onChange }: ProductEditorProps) {
   const update = (changes: Partial<ProductDraft>) => {
     onChange({ ...draft, ...changes, updatedAt: new Date().toISOString() });
@@ -25,10 +37,12 @@ export function ProductEditor({ draft, onChange }: ProductEditorProps) {
     <section className="editor-card">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">{draft.platform === 'jd' ? '京东来源' : '淘宝来源'}</span>
+          <span className="eyebrow">{PLATFORM_LABELS[draft.platform]}</span>
           <h2>编辑发布内容</h2>
         </div>
-        <span className={`confidence confidence--${draft.confidence}`}>{draft.confidence}</span>
+        <span className={`confidence confidence--${draft.confidence}`}>
+          {CONFIDENCE_LABELS[draft.confidence]}
+        </span>
       </div>
 
       <label className="field">
