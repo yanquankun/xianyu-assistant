@@ -25,6 +25,8 @@ export type WorkflowAction =
   | { type: 'PARSE_FAILED'; operationId: string; message: string }
   | { type: 'DRAFT_RESTORED'; draft: ProductDraft }
   | { type: 'DRAFT_CHANGED'; draft: ProductDraft }
+  | { type: 'IMAGE_SELECTION_TOGGLED'; id: string }
+  | { type: 'IMAGE_LOAD_STATUS_CHANGED'; id: string; loadStatus: ProductDraft['images'][number]['loadStatus'] }
   | { type: 'EXPANSION_STARTED' }
   | { type: 'EXPANSION_RECEIVED'; preview: ExpansionPreview }
   | { type: 'EXPANSION_APPLIED'; now: string }
@@ -137,13 +139,52 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
       return {
         ...state,
         phase: 'editing',
-        draft: action.draft,
+        draft: {
+          ...action.draft,
+          images: action.draft.images.map((image) => ({ ...image, loadStatus: 'idle' }))
+        },
         expansionPreview: null,
         statusMessage: '已恢复本地草稿',
         errorMessage: null
       };
     case 'DRAFT_CHANGED':
       return { ...state, draft: action.draft, phase: 'editing' };
+    case 'IMAGE_SELECTION_TOGGLED':
+      if (state.draft === null) {
+        return state;
+      }
+      return {
+        ...state,
+        phase: 'editing',
+        draft: {
+          ...state.draft,
+          images: state.draft.images.map((image) =>
+            image.id === action.id ? { ...image, selected: !image.selected } : image
+          ),
+          updatedAt: new Date().toISOString()
+        }
+      };
+    case 'IMAGE_LOAD_STATUS_CHANGED':
+      if (state.draft === null) {
+        return state;
+      }
+      return {
+        ...state,
+        phase: 'editing',
+        draft: {
+          ...state.draft,
+          images: state.draft.images.map((image) =>
+            image.id === action.id
+              ? {
+                  ...image,
+                  loadStatus: action.loadStatus,
+                  selected: action.loadStatus === 'failed' ? false : image.selected
+                }
+              : image
+          ),
+          updatedAt: new Date().toISOString()
+        }
+      };
     case 'EXPANSION_STARTED':
       return { ...state, phase: 'expanding', statusMessage: 'AI 正在整理文案', errorMessage: null };
     case 'EXPANSION_RECEIVED':

@@ -102,6 +102,16 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: '填入闲鱼' })).toBeDisabled();
   });
 
+  it('手动输入负原价时不把无效数值写入草稿', async () => {
+    render(<App services={createServices()} />);
+    fireEvent.click(screen.getByRole('button', { name: '手动填写' }));
+    const originalPrice = await screen.findByLabelText('原价');
+
+    fireEvent.change(originalPrice, { target: { value: '-1' } });
+
+    expect(originalPrice).toHaveValue(null);
+  });
+
   it('打开侧边栏时恢复本地草稿', async () => {
     const storedDraft = {
       id: 'stored-1',
@@ -128,6 +138,62 @@ describe('App', () => {
 
     expect(await screen.findByDisplayValue('已保存标题')).toBeVisible();
     expect(screen.getByText('已恢复本地草稿')).toBeVisible();
+  });
+
+  it('所有已选择图片加载完成前保持填表按钮禁用', async () => {
+    const storedDraft = {
+      id: 'stored-images',
+      platform: 'taobao' as const,
+      canonicalUrl: 'https://item.taobao.com/item.htm?id=1',
+      source: {
+        title: '商品标题',
+        description: '商品描述',
+        price: 20,
+        currency: 'CNY'
+      },
+      title: '商品标题',
+      description: '商品描述',
+      price: 20,
+      currency: 'CNY',
+      images: [
+        {
+          id: 'loaded',
+          url: 'https://img.example.com/loaded.jpg',
+          source: 'dom' as const,
+          selected: true,
+          loadStatus: 'loaded' as const
+        },
+        {
+          id: 'pending',
+          url: 'https://img.example.com/pending.jpg',
+          source: 'dom' as const,
+          selected: true,
+          loadStatus: 'idle' as const
+        }
+      ],
+      warnings: [],
+      confidence: 'high' as const,
+      shippingMethod: '包邮',
+      categoryNote: '',
+      updatedAt: '2026-08-31T12:00:00.000Z'
+    };
+    render(
+      <App
+        services={createServices({
+          loadDraft: () => Promise.resolve(storedDraft),
+          checkXianyuLogin: () => Promise.resolve('logged-in')
+        })}
+      />
+    );
+
+    expect(await screen.findByDisplayValue('商品标题')).toBeVisible();
+    const fillButton = screen.getByRole('button', { name: '填入闲鱼' });
+    expect(fillButton).toBeDisabled();
+
+    fireEvent.load(screen.getByRole('img', { name: '商品图片 1' }));
+    fireEvent.load(screen.getByRole('img', { name: '商品图片 2' }));
+
+    await waitFor(() => expect(fillButton).toBeEnabled());
   });
 
   it('进入运行记录时刷新当前浏览器中的最新结果', async () => {

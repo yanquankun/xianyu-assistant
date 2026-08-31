@@ -39,7 +39,7 @@ function isNullablePrice(value: unknown): value is number | null {
 }
 
 function isOptionalPrice(value: unknown): value is number | undefined {
-  return value === undefined || (isFiniteNumber(value) && value >= 0);
+  return value === undefined || (isFiniteNumber(value) && value > 0);
 }
 
 function isStringArray(value: unknown, maximum: number): value is string[] {

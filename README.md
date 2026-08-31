@@ -124,6 +124,8 @@ pnpm zip
 
 `pnpm test:e2e` 使用独立 Chromium Profile、匿名商品夹具、本地 AI 接口和模拟闲鱼页面，验证解析、AI 预览、登录提示、表单填充以及最终发布按钮未被点击。它不会读取日常 Chrome Profile，也不会访问真实闲鱼账户。
 
+无头端到端测试直接打开扩展的 `sidepanel.html`，并在测试专用 Manifest 中预授权夹具来源。因此，工具栏图标打开原生 Side Panel、Chrome 权限弹窗的允许与拒绝流程仍属于人工验收项，不能由当前自动化结果代替。
+
 ## 项目结构
 
 ```text

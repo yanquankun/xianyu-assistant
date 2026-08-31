@@ -28,6 +28,7 @@ export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promis
 
 const AI_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_AI_CONTENT_LENGTH = 20_000;
+const MAX_AI_RESPONSE_BYTES = 1_000_000;
 
 function validateSettings(settings: AiSettings): void {
   if (settings.apiKey.trim().length === 0 || settings.model.trim().length === 0) {
@@ -103,6 +104,32 @@ function errorForStatus(status: number): AiClientError {
   return new AiClientError('AI_NETWORK_ERROR', `AI 接口返回 HTTP ${String(status)}`);
 }
 
+async function readBoundedResponseText(response: Response): Promise<string> {
+  const declaredSize = Number(response.headers.get('content-length') ?? '0');
+  if (Number.isFinite(declaredSize) && declaredSize > MAX_AI_RESPONSE_BYTES) {
+    throw new AiClientError('AI_INVALID_RESPONSE', 'AI 响应数据过大');
+  }
+  if (response.body === null) {
+    return '';
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let totalBytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      return `${text}${decoder.decode()}`;
+    }
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_AI_RESPONSE_BYTES) {
+      await reader.cancel('AI 响应数据过大');
+      throw new AiClientError('AI_INVALID_RESPONSE', 'AI 响应数据过大');
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+}
+
 async function requestChat(
   fetchImpl: FetchLike,
   settings: AiSettings,
@@ -111,31 +138,43 @@ async function requestChat(
 ): Promise<string> {
   validateSettings(settings);
   const url = normalizeChatCompletionsUrl(settings.baseUrl);
-  let response: Response;
   const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    const request = fetchImpl(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${settings.apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: settings.model,
-        temperature: settings.temperature,
-        ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
-        messages
-      }),
-      signal: controller.signal
-    });
+    const request = (async () => {
+      const response = await fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${settings.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: settings.model,
+          temperature: settings.temperature,
+          ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+          messages
+        }),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        throw errorForStatus(response.status);
+      }
+      const responseText = await readBoundedResponseText(response);
+      let payload: unknown;
+      try {
+        payload = JSON.parse(responseText);
+      } catch {
+        throw new AiClientError('AI_INVALID_RESPONSE', 'AI 接口没有返回有效 JSON');
+      }
+      return extractContent(payload);
+    })();
     const timeoutRequest = new Promise<never>((_resolve, reject) => {
       timeout = setTimeout(() => {
         controller.abort();
         reject(new AiClientError('AI_NETWORK_ERROR', 'AI 请求超时，请稍后重试'));
       }, AI_REQUEST_TIMEOUT_MS);
     });
-    response = await Promise.race([request, timeoutRequest]);
+    return await Promise.race([request, timeoutRequest]);
   } catch (error) {
     if (error instanceof AiClientError) {
       throw error;
@@ -146,16 +185,6 @@ async function requestChat(
       clearTimeout(timeout);
     }
   }
-  if (!response.ok) {
-    throw errorForStatus(response.status);
-  }
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    throw new AiClientError('AI_INVALID_RESPONSE', 'AI 接口没有返回有效 JSON');
-  }
-  return extractContent(payload);
 }
 
 export function createAiClient(fetchImpl: FetchLike): AiClient {

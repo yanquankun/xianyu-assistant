@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   selectSourceTab,
+  selectXianyuLoginTab,
   selectXianyuTab,
   withTemporaryTab,
   type BrowserTab
@@ -46,6 +47,18 @@ describe('selectXianyuTab', () => {
       throw new Error('测试需要非闲鱼标签页');
     }
     expect(selectXianyuTab([nonXianyuTab], 1)).toBeNull();
+  });
+});
+
+describe('selectXianyuLoginTab', () => {
+  it('只复用登录页，不把已有发布页导航到登录页', () => {
+    const xianyuTabs: BrowserTab[] = [
+      { id: 1, url: 'https://www.goofish.com/publish', active: true, windowId: 1 },
+      { id: 2, url: 'https://www.goofish.com/login?from=publish', active: false, windowId: 1 }
+    ];
+
+    expect(selectXianyuLoginTab(xianyuTabs)).toBe(2);
+    expect(selectXianyuLoginTab(xianyuTabs.slice(0, 1))).toBeNull();
   });
 });
 

@@ -51,6 +51,9 @@ describe('parseRuntimeMessage', () => {
     { type: 'EXPAND_DRAFT', settings: null, draft },
     { type: 'FILL_XIANYU_DRAFT', draft: { ...draft, price: Number.NaN } },
     { type: 'FILL_XIANYU_DRAFT', draft: { ...draft, originalPrice: null } },
+    { type: 'FILL_XIANYU_DRAFT', draft: { ...draft, originalPrice: 0 } },
+    { type: 'FILL_XIANYU_DRAFT', draft: { ...draft, originalPrice: -1 } },
+    { type: 'FILL_XIANYU_DRAFT', draft: { ...draft, originalPrice: Number.POSITIVE_INFINITY } },
     {
       type: 'FILL_XIANYU_DRAFT',
       draft: { ...draft, source: { ...draft.source, originalPrice: null } }

@@ -9,13 +9,14 @@
   },
   "packageManager": "pnpm@11.19.0",
   "scripts": {
+    "prepare": "wxt prepare",
     "dev": "wxt",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "wxt build && wxt build --mode e2e && playwright test",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "check": "wxt prepare && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "build": "wxt build",
     "zip": "wxt zip"
   },

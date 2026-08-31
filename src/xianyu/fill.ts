@@ -1,4 +1,5 @@
 import type { ProductImage } from '../domain/product';
+import type { AppError, OperationResult } from '../domain/errors';
 import { fillFileInput, fillTextControl, findFileInput, findTextControl } from './dom';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -6,6 +7,8 @@ const MAX_IMAGE_COUNT = 9;
 const MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
 const IMAGE_REQUEST_TIMEOUT_MS = 20_000;
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+class ImageDownloadError extends Error {}
 
 export interface TransferableImage {
   id: string;
@@ -65,7 +68,9 @@ export function isXianyuFillPayload(value: unknown): value is XianyuFillPayload 
     !Number.isFinite(value.price) ||
     value.price <= 0 ||
     (value.originalPrice !== undefined &&
-      (typeof value.originalPrice !== 'number' || !Number.isFinite(value.originalPrice))) ||
+      (typeof value.originalPrice !== 'number' ||
+        !Number.isFinite(value.originalPrice) ||
+        value.originalPrice <= 0)) ||
     !isBoundedText(value.shippingMethod, 100) ||
     !isBoundedText(value.categoryNote, 1_000) ||
     !Array.isArray(value.images) ||
@@ -92,6 +97,61 @@ export interface FillResult {
   filled: FillField[];
   skipped: SkippedField[];
   warnings: string[];
+}
+
+const FILL_FIELDS: readonly FillField[] = ['title', 'price', 'description', 'images'];
+
+function isFillField(value: unknown): value is FillField {
+  return typeof value === 'string' && FILL_FIELDS.includes(value as FillField);
+}
+
+function isStringList(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 100 &&
+    value.every((entry) => typeof entry === 'string' && entry.length <= 2_000)
+  );
+}
+
+function isFillResultValue(value: unknown): value is FillResult {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.filled) &&
+    value.filled.length <= FILL_FIELDS.length &&
+    value.filled.every(isFillField) &&
+    Array.isArray(value.skipped) &&
+    value.skipped.length <= FILL_FIELDS.length &&
+    value.skipped.every(
+      (entry) =>
+        isRecord(entry) &&
+        isFillField(entry.field) &&
+        isBoundedText(entry.reason, 2_000) &&
+        entry.reason.length > 0
+    ) &&
+    isStringList(value.warnings)
+  );
+}
+
+function isAppError(value: unknown): value is AppError {
+  return (
+    isRecord(value) &&
+    isBoundedText(value.code, 100) &&
+    value.code.length > 0 &&
+    isBoundedText(value.message, 2_000) &&
+    value.message.length > 0 &&
+    isBoundedText(value.recovery, 2_000) &&
+    typeof value.draftPreserved === 'boolean'
+  );
+}
+
+export function parseXianyuFillResult(value: unknown): OperationResult<FillResult> | null {
+  if (!isRecord(value) || typeof value.ok !== 'boolean') {
+    return null;
+  }
+  if (value.ok) {
+    return isFillResultValue(value.value) ? { ok: true, value: value.value } : null;
+  }
+  return isAppError(value.error) ? { ok: false, error: value.error } : null;
 }
 
 export type ImageFetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -124,28 +184,78 @@ function base64ToBytes(value: string): Uint8Array {
   return bytes;
 }
 
+async function readBoundedImageBytes(response: Response): Promise<Uint8Array> {
+  if (response.body === null) {
+    return new Uint8Array();
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      const bytes = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return bytes;
+    }
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_IMAGE_BYTES) {
+      await reader.cancel('图片超过 10 MB 上限');
+      throw new ImageDownloadError('图片超过 10 MB 上限');
+    }
+    chunks.push(value);
+  }
+}
+
 async function downloadImage(
   fetchImpl: ImageFetchLike,
   image: ProductImage
 ): Promise<{ file: TransferableImage; byteLength: number }> {
-  let response: Response;
   const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    const request = fetchImpl(image.url, {
-      method: 'GET',
-      credentials: 'omit',
-      signal: controller.signal
-    });
+    const request = (async () => {
+      const response = await fetchImpl(image.url, {
+        method: 'GET',
+        credentials: 'omit',
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        throw new ImageDownloadError(`图片下载返回 HTTP ${String(response.status)}`);
+      }
+      const mimeType =
+        (response.headers.get('content-type') ?? '').split(';', 1)[0]?.trim().toLowerCase() ?? '';
+      if (!ALLOWED_IMAGE_TYPES.has(mimeType)) {
+        throw new ImageDownloadError(`图片响应类型不受支持：${mimeType || '未知类型'}`);
+      }
+      const declaredSize = Number(response.headers.get('content-length') ?? '0');
+      if (Number.isFinite(declaredSize) && declaredSize > MAX_IMAGE_BYTES) {
+        throw new ImageDownloadError('图片超过 10 MB 上限');
+      }
+      const bytes = await readBoundedImageBytes(response);
+      return {
+        file: {
+          id: image.id,
+          name: `${image.id}.${extensionForMime(mimeType)}`,
+          mimeType,
+          dataBase64: bytesToBase64(bytes)
+        },
+        byteLength: bytes.byteLength
+      };
+    })();
     const timeoutRequest = new Promise<never>((_resolve, reject) => {
       timeout = setTimeout(() => {
         controller.abort();
-        reject(new Error('图片下载超时，请稍后重试'));
+        reject(new ImageDownloadError('图片下载超时，请稍后重试'));
       }, IMAGE_REQUEST_TIMEOUT_MS);
     });
-    response = await Promise.race([request, timeoutRequest]);
+    return await Promise.race([request, timeoutRequest]);
   } catch (error) {
-    if (error instanceof Error && error.message === '图片下载超时，请稍后重试') {
+    if (error instanceof ImageDownloadError) {
       throw error;
     }
     throw new Error('图片下载失败，请检查网络或来源权限', { cause: error });
@@ -154,31 +264,6 @@ async function downloadImage(
       clearTimeout(timeout);
     }
   }
-  if (!response.ok) {
-    throw new Error(`图片下载返回 HTTP ${String(response.status)}`);
-  }
-  const mimeType =
-    (response.headers.get('content-type') ?? '').split(';', 1)[0]?.trim().toLowerCase() ?? '';
-  if (!ALLOWED_IMAGE_TYPES.has(mimeType)) {
-    throw new Error(`图片响应类型不受支持：${mimeType || '未知类型'}`);
-  }
-  const declaredSize = Number(response.headers.get('content-length') ?? '0');
-  if (Number.isFinite(declaredSize) && declaredSize > MAX_IMAGE_BYTES) {
-    throw new Error('图片超过 10 MB 上限');
-  }
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > MAX_IMAGE_BYTES) {
-    throw new Error('图片超过 10 MB 上限');
-  }
-  return {
-    file: {
-      id: image.id,
-      name: `${image.id}.${extensionForMime(mimeType)}`,
-      mimeType,
-      dataBase64: bytesToBase64(bytes)
-    },
-    byteLength: bytes.byteLength
-  };
 }
 
 export async function downloadSelectedImages(

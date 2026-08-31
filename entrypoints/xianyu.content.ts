@@ -27,6 +27,13 @@ export default defineContentScript({
   matches: ['https://www.goofish.com/*'],
   runAt: 'document_idle',
   main() {
+    const scope = globalThis as typeof globalThis & {
+      __xianyuAssistantContentReady?: boolean;
+    };
+    if (scope.__xianyuAssistantContentReady === true) {
+      return;
+    }
+    scope.__xianyuAssistantContentReady = true;
     browser.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
       if (sender.id !== browser.runtime.id) {
         return undefined;
@@ -41,7 +48,12 @@ export default defineContentScript({
           (error: unknown) =>
             sendResponse({
               ok: false,
-              error: error instanceof Error ? error.message : '闲鱼表单填写失败'
+              error: {
+                code: 'XIANYU_FILL_FAILED',
+                message: error instanceof Error ? error.message : '闲鱼表单填写失败',
+                recovery: '请检查闲鱼页面字段后重试',
+                draftPreserved: true
+              }
             })
         );
         return true;

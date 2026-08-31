@@ -54,6 +54,26 @@ describe('reduceWorkflow', () => {
     expect(state.statusMessage).toBe('已恢复本地草稿');
   });
 
+  it('恢复草稿时重新验证图片加载状态', () => {
+    const restored = reduceWorkflow(initialWorkflowState, {
+      type: 'DRAFT_RESTORED',
+      draft: {
+        ...draft,
+        images: [
+          {
+            id: 'stored-image',
+            url: 'https://img.example.com/stored.jpg',
+            source: 'dom',
+            selected: true,
+            loadStatus: 'loaded'
+          }
+        ]
+      }
+    });
+
+    expect(restored.draft?.images[0]?.loadStatus).toBe('idle');
+  });
+
   it('解析成功后进入可编辑状态', () => {
     const parsing = reduceWorkflow(initialWorkflowState, {
       type: 'PARSE_STARTED',
@@ -110,5 +130,47 @@ describe('reduceWorkflow', () => {
     });
     expect(applied.draft?.title).toBe('扩写标题');
     expect(applied.expansionPreview).toBeNull();
+  });
+
+  it('并发图片加载事件基于最新草稿顺序合并，不互相覆盖', () => {
+    const editing = {
+      ...initialWorkflowState,
+      phase: 'editing' as const,
+      draft: {
+        ...draft,
+        images: [
+          {
+            id: 'image-1',
+            url: 'https://img.example.com/1.jpg',
+            source: 'dom' as const,
+            selected: true,
+            loadStatus: 'idle' as const
+          },
+          {
+            id: 'image-2',
+            url: 'https://img.example.com/2.jpg',
+            source: 'dom' as const,
+            selected: true,
+            loadStatus: 'idle' as const
+          }
+        ]
+      }
+    };
+
+    const firstLoaded = reduceWorkflow(editing, {
+      type: 'IMAGE_LOAD_STATUS_CHANGED',
+      id: 'image-1',
+      loadStatus: 'loaded'
+    });
+    const bothLoaded = reduceWorkflow(firstLoaded, {
+      type: 'IMAGE_LOAD_STATUS_CHANGED',
+      id: 'image-2',
+      loadStatus: 'loaded'
+    });
+
+    expect(bothLoaded.draft?.images.map((image) => image.loadStatus)).toEqual([
+      'loaded',
+      'loaded'
+    ]);
   });
 });

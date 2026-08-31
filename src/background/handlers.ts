@@ -1,12 +1,25 @@
 import { createAiClient } from '../ai/client';
 import { ensureProductDestination, normalizeHttpUrl } from './permissions';
-import { selectSourceTab, selectXianyuTab, type BrowserTab } from './tabs';
+import {
+  selectSourceTab,
+  selectXianyuLoginTab,
+  selectXianyuTab,
+  type BrowserTab
+} from './tabs';
 import type { AppError, AppErrorCode, OperationResult } from '../domain/errors';
 import { parseParsedProduct, parseRuntimeMessage, type RuntimeMessage } from '../domain/messages';
 import type { ParsedProduct, ProductDraft } from '../domain/product';
 import { createLocalStore, type StorageAreaLike } from '../storage/local-store';
 import type { OperationStage } from '../storage/operation-log';
-import { downloadSelectedImages, type FillResult } from '../xianyu/fill';
+import {
+  downloadSelectedImages,
+  parseXianyuFillResult,
+  type FillResult
+} from '../xianyu/fill';
+import {
+  sendXianyuMessage,
+  type XianyuContentDependencies
+} from '../xianyu/content-ready';
 import type { XianyuLoginState } from '../xianyu/login';
 import {
   prepareXianyuPublishTab,
@@ -121,6 +134,22 @@ function xianyuTabDependencies(): XianyuTabDependencies {
   };
 }
 
+function xianyuContentDependencies(): XianyuContentDependencies {
+  return {
+    waitForComplete: waitForTabComplete,
+    async getTabUrl(tabId): Promise<string | undefined> {
+      return (await browser.tabs.get(tabId)).url;
+    },
+    sendMessage: (tabId, message) => browser.tabs.sendMessage(tabId, message),
+    async inject(tabId): Promise<void> {
+      await browser.scripting.executeScript({
+        target: { tabId },
+        files: ['/content-scripts/xianyu.js']
+      });
+    }
+  };
+}
+
 async function extractProductFromTab(tabId: number): Promise<ParsedProduct> {
   await browser.scripting.executeScript({
     target: { tabId },
@@ -174,7 +203,11 @@ async function checkXianyuLogin(): Promise<XianyuLoginState> {
     return 'unknown';
   }
   try {
-    return await browser.tabs.sendMessage(selection.tabId, { type: 'CHECK_XIANYU_LOGIN' });
+    return await sendXianyuMessage<XianyuLoginState>(
+      xianyuContentDependencies(),
+      selection.tabId,
+      { type: 'CHECK_XIANYU_LOGIN' }
+    );
   } catch {
     return 'unknown';
   }
@@ -187,14 +220,20 @@ function validateDraft(draft: ProductDraft): number {
   if (draft.price === null || !Number.isFinite(draft.price) || draft.price <= 0) {
     throw new Error('请填写有效售价');
   }
-  if (!draft.images.some((image) => image.selected && image.loadStatus === 'loaded')) {
-    throw new Error('请至少选择一张已成功加载的商品图片');
+  if (
+    draft.originalPrice !== undefined &&
+    (!Number.isFinite(draft.originalPrice) || draft.originalPrice <= 0)
+  ) {
+    throw new Error('请填写有效原价，或留空');
+  }
+  const selectedImages = draft.images.filter((image) => image.selected);
+  if (selectedImages.length === 0) {
+    throw new Error('请至少选择一张商品图片');
+  }
+  if (selectedImages.some((image) => image.loadStatus !== 'loaded')) {
+    throw new Error('请等待已选择图片加载完成，或取消加载失败的图片');
   }
   return draft.price;
-}
-
-function isFillResult(value: unknown): value is OperationResult<FillResult> {
-  return typeof value === 'object' && value !== null && 'ok' in value;
 }
 
 async function fillDraft(draft: ProductDraft): Promise<FillResult> {
@@ -203,9 +242,11 @@ async function fillDraft(draft: ProductDraft): Promise<FillResult> {
   const activeTabId = (await browser.tabs.query({ active: true, currentWindow: true })).at(0)?.id;
   const existing = selectXianyuTab(tabs, activeTabId);
   if (existing !== null) {
-    const existingLoginState: XianyuLoginState = await browser.tabs.sendMessage(existing.tabId, {
-      type: 'CHECK_XIANYU_LOGIN'
-    });
+    const existingLoginState = await sendXianyuMessage<XianyuLoginState>(
+      xianyuContentDependencies(),
+      existing.tabId,
+      { type: 'CHECK_XIANYU_LOGIN' }
+    );
     if (existingLoginState === 'logged-out') {
       throw new Error('需要登录闲鱼');
     }
@@ -214,9 +255,11 @@ async function fillDraft(draft: ProductDraft): Promise<FillResult> {
     }
   }
   const tab = await prepareXianyuPublishTab(xianyuTabDependencies());
-  const loginState: XianyuLoginState = await browser.tabs.sendMessage(tab.tabId, {
-    type: 'CHECK_XIANYU_LOGIN'
-  });
+  const loginState = await sendXianyuMessage<XianyuLoginState>(
+    xianyuContentDependencies(),
+    tab.tabId,
+    { type: 'CHECK_XIANYU_LOGIN' }
+  );
   if (loginState === 'logged-out') {
     throw new Error('需要登录闲鱼');
   }
@@ -228,28 +271,33 @@ async function fillDraft(draft: ProductDraft): Promise<FillResult> {
   if (downloaded.files.length === 0) {
     throw new Error(downloaded.failures.at(0)?.message ?? '没有可上传图片');
   }
-  const response: unknown = await browser.tabs.sendMessage(tab.tabId, {
-    type: 'FILL_XIANYU_FORM',
-    payload: {
-      title: draft.title,
-      description: draft.description,
-      price,
-      ...(draft.originalPrice === undefined ? {} : { originalPrice: draft.originalPrice }),
-      shippingMethod: draft.shippingMethod,
-      categoryNote: draft.categoryNote,
-      images: downloaded.files
+  const response: unknown = await sendXianyuMessage(
+    xianyuContentDependencies(),
+    tab.tabId,
+    {
+      type: 'FILL_XIANYU_FORM',
+      payload: {
+        title: draft.title,
+        description: draft.description,
+        price,
+        ...(draft.originalPrice === undefined ? {} : { originalPrice: draft.originalPrice }),
+        shippingMethod: draft.shippingMethod,
+        categoryNote: draft.categoryNote,
+        images: downloaded.files
+      }
     }
-  });
-  if (!isFillResult(response)) {
+  );
+  const fillResult = parseXianyuFillResult(response);
+  if (fillResult === null) {
     throw new Error('闲鱼页面返回了无法识别的填写结果');
   }
-  if (!response.ok) {
-    throw new Error(response.error.message);
+  if (!fillResult.ok) {
+    throw new Error(fillResult.error.message);
   }
   return {
-    ...response.value,
+    ...fillResult.value,
     warnings: [
-      ...response.value.warnings,
+      ...fillResult.value.warnings,
       ...downloaded.failures.map((failure) => `${failure.id}：${failure.message}`)
     ]
   };
@@ -257,13 +305,12 @@ async function fillDraft(draft: ProductDraft): Promise<FillResult> {
 
 async function openXianyuLogin(): Promise<void> {
   const tabs = await listTabs();
-  const activeTabId = (await browser.tabs.query({ active: true, currentWindow: true })).at(0)?.id;
-  const existing = selectXianyuTab(tabs, activeTabId);
-  if (existing === null) {
-    await browser.tabs.create({ url: XIANYU_LOGIN_URL, active: true });
+  const loginTabId = selectXianyuLoginTab(tabs);
+  if (loginTabId !== null) {
+    await browser.tabs.update(loginTabId, { active: true });
     return;
   }
-  await browser.tabs.update(existing.tabId, { url: XIANYU_LOGIN_URL, active: true });
+  await browser.tabs.create({ url: XIANYU_LOGIN_URL, active: true });
 }
 
 function appError(code: AppErrorCode, message: string): AppError {

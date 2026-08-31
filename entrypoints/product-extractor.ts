@@ -14,11 +14,13 @@ function isExtractMessage(value: unknown): value is ExtractProductDocumentMessag
 }
 
 export default defineUnlistedScript(() => {
-  const documentState = document.documentElement.dataset;
-  if (documentState.xianyuAssistantExtractor === 'ready') {
+  const scope = globalThis as typeof globalThis & {
+    __xianyuAssistantExtractorReady?: boolean;
+  };
+  if (scope.__xianyuAssistantExtractorReady === true) {
     return;
   }
-  documentState.xianyuAssistantExtractor = 'ready';
+  scope.__xianyuAssistantExtractorReady = true;
   browser.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
     if (!isExtractMessage(message) || sender.id !== browser.runtime.id) {
       return undefined;

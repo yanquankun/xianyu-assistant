@@ -40,6 +40,13 @@ function isXianyuUrl(value: string | undefined): boolean {
   }
 }
 
+function isXianyuLoginUrl(value: string | undefined): boolean {
+  if (!isXianyuUrl(value) || value === undefined) {
+    return false;
+  }
+  return new URL(value).pathname.startsWith('/login');
+}
+
 export function selectSourceTab(
   tabs: readonly BrowserTab[],
   targetUrl: string
@@ -65,6 +72,10 @@ export function selectXianyuTab(
   return existing === undefined
     ? null
     : { tabId: existing.id, reusedActiveTab: false };
+}
+
+export function selectXianyuLoginTab(tabs: readonly BrowserTab[]): number | null {
+  return tabs.find((tab) => isXianyuLoginUrl(tab.url))?.id ?? null;
 }
 
 export async function withTemporaryTab<T>(

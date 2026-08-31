@@ -8,6 +8,7 @@ import {
   downloadSelectedImages,
   fillXianyuDraft,
   isXianyuFillPayload,
+  parseXianyuFillResult,
   type XianyuFillPayload
 } from '../../src/xianyu/fill';
 
@@ -39,6 +40,7 @@ describe('fillXianyuDraft', () => {
   it('严格校验跨上下文填表消息边界', () => {
     expect(isXianyuFillPayload(validPayload)).toBe(true);
     expect(isXianyuFillPayload({ ...validPayload, price: Number.NaN })).toBe(false);
+    expect(isXianyuFillPayload({ ...validPayload, originalPrice: -1 })).toBe(false);
     expect(
       isXianyuFillPayload({
         ...validPayload,
@@ -72,6 +74,28 @@ describe('fillXianyuDraft', () => {
     );
     expect(document.querySelector<HTMLInputElement>('input[name="images"]')?.files).toHaveLength(1);
     expect(clicked).toBe(false);
+  });
+
+  it('严格校验闲鱼内容脚本返回的成功与失败响应', () => {
+    expect(
+      parseXianyuFillResult({
+        ok: true,
+        value: { filled: ['title'], skipped: [], warnings: [] }
+      })
+    ).toEqual({ ok: true, value: { filled: ['title'], skipped: [], warnings: [] } });
+    expect(
+      parseXianyuFillResult({
+        ok: false,
+        error: {
+          code: 'XIANYU_FILL_FAILED',
+          message: '填写失败',
+          recovery: '检查页面',
+          draftPreserved: true
+        }
+      })
+    ).toMatchObject({ ok: false, error: { message: '填写失败' } });
+    expect(parseXianyuFillResult({ ok: true, value: {} })).toBeNull();
+    expect(parseXianyuFillResult({ ok: false, error: '填写失败' })).toBeNull();
   });
 
   it('文本字段触发 input 和 change 事件', async () => {
@@ -207,6 +231,27 @@ describe('downloadSelectedImages', () => {
         () => new Promise<Response>(() => undefined),
         [selectedImage]
       );
+      const resultExpectation = expect(operation).resolves.toMatchObject({
+        files: [],
+        failures: [{ message: '图片下载超时，请稍后重试' }]
+      });
+
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      await resultExpectation;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('图片已返回响应头但正文不结束时仍会超时', async () => {
+    vi.useFakeTimers();
+    try {
+      const response = new Response(new ReadableStream({ start: () => undefined }), {
+        status: 200,
+        headers: { 'content-type': 'image/png' }
+      });
+      const operation = downloadSelectedImages(() => Promise.resolve(response), [selectedImage]);
       const resultExpectation = expect(operation).resolves.toMatchObject({
         files: [],
         failures: [{ message: '图片下载超时，请稍后重试' }]

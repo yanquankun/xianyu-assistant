@@ -182,6 +182,28 @@ describe('createAiClient', () => {
     }
   });
 
+  it('AI 已返回响应头但正文不结束时仍会超时', async () => {
+    vi.useFakeTimers();
+    try {
+      const response = new Response(new ReadableStream({ start: () => undefined }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+      const client = createAiClient(() => Promise.resolve(response));
+      const operation = client.testConnection(settings);
+      const rejection = expect(operation).rejects.toMatchObject({
+        code: 'AI_NETWORK_ERROR',
+        message: 'AI 请求超时，请稍后重试'
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('拒绝超长 AI 响应', async () => {
     const client = createAiClient(() => Promise.resolve(chatResponse('a'.repeat(20_001))));
 

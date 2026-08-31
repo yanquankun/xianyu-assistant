@@ -205,6 +205,7 @@ export function App({ services }: { services: SidePanelServices }) {
 
   const isBusy =
     state.phase === 'parsing' || state.phase === 'expanding' || state.phase === 'filling';
+  const selectedImages = state.draft?.images.filter((image) => image.selected) ?? [];
   const draftReadyToFill =
     state.draft !== null &&
     state.draft.title.trim().length > 0 &&
@@ -212,7 +213,10 @@ export function App({ services }: { services: SidePanelServices }) {
     state.draft.price !== null &&
     Number.isFinite(state.draft.price) &&
     state.draft.price > 0 &&
-    state.draft.images.some((image) => image.selected && image.loadStatus === 'loaded');
+    (state.draft.originalPrice === undefined ||
+      (Number.isFinite(state.draft.originalPrice) && state.draft.originalPrice > 0)) &&
+    selectedImages.length > 0 &&
+    selectedImages.every((image) => image.loadStatus === 'loaded');
   const fillDisabled = !draftReadyToFill || isBusy || state.loginState === 'logged-out';
   const expansionDisabled =
     state.draft === null ||
@@ -307,6 +311,10 @@ export function App({ services }: { services: SidePanelServices }) {
               <ProductEditor
                 draft={state.draft}
                 onChange={(draft) => dispatch({ type: 'DRAFT_CHANGED', draft })}
+                onImageToggle={(id) => dispatch({ type: 'IMAGE_SELECTION_TOGGLED', id })}
+                onImageLoadStatus={(id, loadStatus) =>
+                  dispatch({ type: 'IMAGE_LOAD_STATUS_CHANGED', id, loadStatus })
+                }
               />
             )}
 

@@ -4,6 +4,8 @@ import { ImagePicker } from './ImagePicker';
 interface ProductEditorProps {
   draft: ProductDraft;
   onChange: (draft: ProductDraft) => void;
+  onImageToggle: (id: string) => void;
+  onImageLoadStatus: (id: string, status: ProductDraft['images'][number]['loadStatus']) => void;
 }
 
 const PLATFORM_LABELS: Record<ProductDraft['platform'], string> = {
@@ -18,17 +20,23 @@ const CONFIDENCE_LABELS: Record<ProductDraft['confidence'], string> = {
   low: '低'
 };
 
-export function ProductEditor({ draft, onChange }: ProductEditorProps) {
+export function ProductEditor({
+  draft,
+  onChange,
+  onImageToggle,
+  onImageLoadStatus
+}: ProductEditorProps) {
   const update = (changes: Partial<ProductDraft>) => {
     onChange({ ...draft, ...changes, updatedAt: new Date().toISOString() });
   };
 
   const updateOriginalPrice = (value: string) => {
     const nextDraft = { ...draft, updatedAt: new Date().toISOString() };
-    if (value.length === 0) {
+    const amount = Number(value);
+    if (value.length === 0 || !Number.isFinite(amount) || amount <= 0) {
       delete nextDraft.originalPrice;
     } else {
-      nextDraft.originalPrice = Number(value);
+      nextDraft.originalPrice = amount;
     }
     onChange(nextDraft);
   };
@@ -116,26 +124,8 @@ export function ProductEditor({ draft, onChange }: ProductEditorProps) {
         <span>选择商品图片</span>
         <ImagePicker
           images={draft.images}
-          onToggle={(id) =>
-            update({
-              images: draft.images.map((image) =>
-                image.id === id ? { ...image, selected: !image.selected } : image
-              )
-            })
-          }
-          onLoadStatus={(id, loadStatus) =>
-            update({
-              images: draft.images.map((image) =>
-                image.id === id
-                  ? {
-                      ...image,
-                      loadStatus,
-                      selected: loadStatus === 'failed' ? false : image.selected
-                    }
-                  : image
-              )
-            })
-          }
+          onToggle={onImageToggle}
+          onLoadStatus={onImageLoadStatus}
         />
       </div>
 
