@@ -1,4 +1,5 @@
 import { createAiClient } from '../ai/client';
+import { checkXianyuLoginFromTabs } from './login-check';
 import { ensureProductDestination, normalizeHttpUrl } from './permissions';
 import {
   selectSourceTab,
@@ -20,7 +21,7 @@ import {
   sendXianyuMessage,
   type XianyuContentDependencies
 } from '../xianyu/content-ready';
-import type { XianyuLoginState } from '../xianyu/login';
+import type { XianyuLoginCheckResult, XianyuLoginState } from '../xianyu/login';
 import {
   prepareXianyuPublishTab,
   XIANYU_PUBLISH_URL,
@@ -196,22 +197,17 @@ async function parseProduct(url: string): Promise<ParsedProduct> {
   }
 }
 
-async function checkXianyuLogin(): Promise<XianyuLoginState> {
-  const tabs = await listTabs();
-  const activeTabId = (await browser.tabs.query({ active: true, currentWindow: true })).at(0)?.id;
-  const selection = selectXianyuTab(tabs, activeTabId);
-  if (selection === null) {
-    return 'unknown';
-  }
-  try {
-    return await sendXianyuMessage<XianyuLoginState>(
-      xianyuContentDependencies(),
-      selection.tabId,
-      { type: 'CHECK_XIANYU_LOGIN' }
-    );
-  } catch {
-    return 'unknown';
-  }
+async function checkXianyuLogin(): Promise<XianyuLoginCheckResult> {
+  return checkXianyuLoginFromTabs({
+    listTabs,
+    async getActiveTabId(): Promise<number | undefined> {
+      return (await browser.tabs.query({ active: true, currentWindow: true })).at(0)?.id;
+    },
+    readLoginState: (tabId) =>
+      sendXianyuMessage<XianyuLoginState>(xianyuContentDependencies(), tabId, {
+        type: 'CHECK_XIANYU_LOGIN'
+      })
+  });
 }
 
 function validateDraft(draft: ProductDraft): number {

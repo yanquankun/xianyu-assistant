@@ -17,7 +17,7 @@ import type {
 } from '../storage/media-store';
 import type { OperationLogEntry } from '../storage/operation-log';
 import type { FillResult } from '../xianyu/fill';
-import type { XianyuLoginState } from '../xianyu/login';
+import type { XianyuLoginCheckResult } from '../xianyu/login';
 import { AiSettingsForm } from './components/AiSettingsForm';
 import { LoginBanner } from './components/LoginBanner';
 import { OperationLog } from './components/OperationLog';
@@ -38,7 +38,7 @@ export interface SidePanelServices {
   parseProduct(url: string): Promise<ParsedProduct>;
   testAiConnection(settings: AiSettings): Promise<AiConnectionResult>;
   expandDraft(settings: AiSettings, draft: ProductDraft): Promise<ExpansionPreviewValue>;
-  checkXianyuLogin(): Promise<XianyuLoginState>;
+  checkXianyuLogin(): Promise<XianyuLoginCheckResult>;
   fillDraft(draft: ProductDraft): Promise<FillResult>;
   openXianyuLogin(): Promise<void>;
   getPanelSide(): Promise<PanelSide>;
@@ -73,6 +73,8 @@ export function App({ services }: { services: SidePanelServices }) {
   const [state, dispatch] = useReducer(reduceWorkflow, initialWorkflowState);
   const [settings, setSettings] = useState<AiSettings>(EMPTY_SETTINGS);
   const [settingsStatus, setSettingsStatus] = useState('');
+  const [loginMessage, setLoginMessage] = useState('');
+  const [isLoginRefreshing, setIsLoginRefreshing] = useState(false);
   const [logs, setLogs] = useState<OperationLogEntry[]>([]);
   const [panelSide, setPanelSide] = useState<PanelSide>('unknown');
   const draftSaveQueue = useRef<Promise<void>>(Promise.resolve());
@@ -88,7 +90,7 @@ export function App({ services }: { services: SidePanelServices }) {
   useEffect(() => {
     let active = true;
     const initialize = async () => {
-      const [storedSettings, storedDraft, loginState, side, entries] = await Promise.all([
+      const [storedSettings, storedDraft, loginResult, side, entries] = await Promise.all([
         services.loadSettings(),
         services.loadDraft(),
         services.checkXianyuLogin(),
@@ -105,7 +107,8 @@ export function App({ services }: { services: SidePanelServices }) {
       if (storedDraft !== null) {
         dispatch({ type: 'DRAFT_RESTORED', draft: storedDraft });
       }
-      dispatch({ type: 'LOGIN_STATE_CHANGED', loginState });
+      dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: loginResult.state });
+      setLoginMessage(loginResult.message);
       setPanelSide(side);
       setLogs(entries);
     };
@@ -219,10 +222,29 @@ export function App({ services }: { services: SidePanelServices }) {
             : `已填写部分内容，${String(skipped)} 个字段需要手动处理`
       });
       dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: 'logged-in' });
+      setLoginMessage('闲鱼已登录');
     } catch (error) {
       dispatch({ type: 'OPERATION_FAILED', message: errorMessage(error) });
-      const loginState = await services.checkXianyuLogin().catch(() => 'unknown' as const);
-      dispatch({ type: 'LOGIN_STATE_CHANGED', loginState });
+      const loginResult = await services.checkXianyuLogin().catch(() => ({
+        state: 'unknown' as const,
+        message: '检查闲鱼登录状态失败，请重试'
+      }));
+      dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: loginResult.state });
+      setLoginMessage(loginResult.message);
+    }
+  };
+
+  const refreshXianyuLogin = async () => {
+    setIsLoginRefreshing(true);
+    try {
+      const result = await services.checkXianyuLogin();
+      dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: result.state });
+      setLoginMessage(result.message);
+    } catch (error) {
+      dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: 'unknown' });
+      setLoginMessage(`检查闲鱼登录状态失败：${errorMessage(error)}`);
+    } finally {
+      setIsLoginRefreshing(false);
     }
   };
 
@@ -456,7 +478,13 @@ export function App({ services }: { services: SidePanelServices }) {
 
         {state.activeView === 'product' ? (
           <>
-            <LoginBanner state={state.loginState} onLogin={() => void services.openXianyuLogin()} />
+            <LoginBanner
+              state={state.loginState}
+              message={loginMessage}
+              isRefreshing={isLoginRefreshing}
+              onRefresh={() => void refreshXianyuLogin()}
+              onLogin={() => void services.openXianyuLogin()}
+            />
             <section className="source-card">
               <div className="section-heading">
                 <div>

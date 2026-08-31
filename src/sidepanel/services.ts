@@ -9,7 +9,7 @@ import { createMediaStore } from '../storage/media-store';
 import { createLocalStore, type LocalStore, type StorageAreaLike } from '../storage/local-store';
 import type { OperationLogEntry, OperationStage } from '../storage/operation-log';
 import type { FillResult } from '../xianyu/fill';
-import type { XianyuLoginState } from '../xianyu/login';
+import type { XianyuLoginCheckResult } from '../xianyu/login';
 import type { PanelSide, SidePanelServices } from './App';
 
 function storageArea(): StorageAreaLike {
@@ -157,8 +157,8 @@ export function createBrowserSidePanelServices(): SidePanelServices {
       return send<ExpansionPreview>({ type: 'EXPAND_DRAFT', settings, draft });
     },
 
-    checkXianyuLogin(): Promise<XianyuLoginState> {
-      return send<XianyuLoginState>({ type: 'CHECK_XIANYU_LOGIN' });
+    checkXianyuLogin(): Promise<XianyuLoginCheckResult> {
+      return send<XianyuLoginCheckResult>({ type: 'CHECK_XIANYU_LOGIN' });
     },
 
     async fillDraft(draft: ProductDraft): Promise<FillResult> {

@@ -1,5 +1,10 @@
 export type XianyuLoginState = 'logged-in' | 'logged-out' | 'unknown';
 
+export interface XianyuLoginCheckResult {
+  state: XianyuLoginState;
+  message: string;
+}
+
 function isXianyuUrl(value: string): boolean {
   try {
     return new URL(value).hostname.toLowerCase() === 'www.goofish.com';

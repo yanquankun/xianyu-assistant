@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import type { ParsedProduct } from '../../src/domain/product';
+import type { XianyuLoginCheckResult } from '../../src/xianyu/login';
 import { App, type SidePanelServices } from '../../src/sidepanel/App';
 
 const parsedProduct: ParsedProduct = {
@@ -56,7 +57,7 @@ function createServices(overrides: Partial<SidePanelServices> = {}): SidePanelSe
         warnings: [],
         factWarnings: []
       }),
-    checkXianyuLogin: () => Promise.resolve('unknown'),
+    checkXianyuLogin: () => Promise.resolve({ state: 'unknown', message: '尚未确认' }),
     fillDraft: () => Promise.resolve({ filled: [], skipped: [], warnings: [] }),
     openXianyuLogin: () => Promise.resolve(),
     getPanelSide: () => Promise.resolve('right'),
@@ -66,9 +67,40 @@ function createServices(overrides: Partial<SidePanelServices> = {}): SidePanelSe
 }
 
 describe('App', () => {
+  it('点击刷新时显示加载并立即采用最新登录状态', async () => {
+    const checks: Promise<XianyuLoginCheckResult>[] = [
+      Promise.resolve({ state: 'unknown', message: '尚未确认' }),
+      new Promise<XianyuLoginCheckResult>((resolve) => {
+        setTimeout(() => resolve({ state: 'logged-in', message: '已重新检查' }), 0);
+      })
+    ];
+    render(
+      <App
+        services={createServices({
+          checkXianyuLogin: () => checks.shift() ?? Promise.reject(new Error('测试调用过多'))
+        })}
+      />
+    );
+
+    await screen.findByText('尚未确认闲鱼登录状态');
+    fireEvent.click(screen.getByRole('button', { name: '刷新闲鱼登录状态' }));
+
+    const refreshButton = screen.getByRole('button', { name: '刷新闲鱼登录状态' });
+    expect(refreshButton).toBeDisabled();
+    expect(refreshButton).toHaveAttribute('aria-busy', 'true');
+
+    expect(await screen.findByText('闲鱼已登录')).toBeVisible();
+    expect(await screen.findByText('已重新检查')).toBeVisible();
+  });
+
   it('未登录时显示提醒且禁用填表动作', async () => {
     render(
-      <App services={createServices({ checkXianyuLogin: () => Promise.resolve('logged-out') })} />
+      <App
+        services={createServices({
+          checkXianyuLogin: () =>
+            Promise.resolve({ state: 'logged-out', message: '请先完成闲鱼网页登录，草稿会保留在本地。' })
+        })}
+      />
     );
 
     expect(await screen.findByText('需要登录闲鱼')).toBeVisible();
@@ -248,7 +280,7 @@ describe('App', () => {
       <App
         services={createServices({
           loadDraft: () => Promise.resolve(storedDraft),
-          checkXianyuLogin: () => Promise.resolve('logged-in')
+          checkXianyuLogin: () => Promise.resolve({ state: 'logged-in', message: '闲鱼已登录' })
         })}
       />
     );
