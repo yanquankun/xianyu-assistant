@@ -1,7 +1,11 @@
 import type { ProductDraft } from '../domain/product';
 import type { AiSettings } from '../domain/settings';
 import { isAiSettings, parseStoredProductDraft } from '../domain/messages';
-import { appendOperationLog, type OperationLogEntry } from './operation-log';
+import {
+  appendOperationLog,
+  parseOperationLogEntry,
+  type OperationLogEntry
+} from './operation-log';
 
 const SETTINGS_KEY = 'aiSettings';
 const DRAFT_KEY = 'productDraft';
@@ -71,7 +75,16 @@ export function createLocalStore(storageArea: StorageAreaLike): LocalStore {
     },
 
     async getLogs(): Promise<OperationLogEntry[]> {
-      return (await readValue<OperationLogEntry[]>(storageArea, LOGS_KEY)) ?? [];
+      const value = await readValue<unknown>(storageArea, LOGS_KEY);
+      if (!Array.isArray(value)) {
+        return [];
+      }
+      return value
+        .flatMap((entry) => {
+          const parsed = parseOperationLogEntry(entry);
+          return parsed === null ? [] : [parsed];
+        })
+        .slice(-100);
     },
 
     async appendLog(entry: OperationLogEntry): Promise<void> {

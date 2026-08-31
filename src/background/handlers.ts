@@ -1,5 +1,6 @@
 import { createAiClient } from '../ai/client';
 import { checkXianyuLoginFromTabs } from './login-check';
+import { createFailureLogEntry, createSuccessLogEntry } from './operation-log-factory';
 import { ensureProductDestination, normalizeHttpUrl } from './permissions';
 import {
   selectSourceTab,
@@ -11,7 +12,7 @@ import type { AppError, AppErrorCode, OperationResult } from '../domain/errors';
 import { parseParsedProduct, parseRuntimeMessage, type RuntimeMessage } from '../domain/messages';
 import type { ParsedProduct, ProductDraft } from '../domain/product';
 import { createLocalStore, type StorageAreaLike } from '../storage/local-store';
-import type { OperationStage } from '../storage/operation-log';
+import type { OperationLogEntry } from '../storage/operation-log';
 import {
   downloadSelectedImages,
   parseXianyuFillResult,
@@ -350,11 +351,12 @@ function codeFor(message: RuntimeMessage, error: unknown): AppErrorCode {
   return 'OPERATION_CANCELLED';
 }
 
-function stageFor(message: RuntimeMessage): OperationStage {
-  if (message.type === 'PARSE_PRODUCT') return 'parse';
-  if (message.type === 'TEST_AI_CONNECTION' || message.type === 'EXPAND_DRAFT') return 'ai';
-  if (message.type === 'CHECK_XIANYU_LOGIN' || message.type === 'OPEN_XIANYU_LOGIN') return 'login';
-  return 'fill';
+async function appendLogSafely(createEntry: () => OperationLogEntry): Promise<void> {
+  try {
+    await store.appendLog(createEntry());
+  } catch {
+    console.error('运行记录保存失败');
+  }
 }
 
 async function handleRuntimeMessage(message: RuntimeMessage): Promise<OperationResult<unknown>> {
@@ -381,25 +383,16 @@ async function handleRuntimeMessage(message: RuntimeMessage): Promise<OperationR
         value = undefined;
         break;
     }
-    await store.appendLog({
-      id: crypto.randomUUID(),
-      timestamp: new Date().toISOString(),
-      stage: stageFor(message),
-      outcome: 'success',
-      message: `${message.type} 已完成`
-    });
+    await appendLogSafely(() =>
+      createSuccessLogEntry(message, value, crypto.randomUUID(), new Date().toISOString())
+    );
     return { ok: true, value };
   } catch (error) {
     const messageText = error instanceof Error ? error.message : '操作失败';
     const code = codeFor(message, error);
-    await store.appendLog({
-      id: crypto.randomUUID(),
-      timestamp: new Date().toISOString(),
-      stage: stageFor(message),
-      outcome: 'failure',
-      message: messageText,
-      code
-    });
+    await appendLogSafely(() =>
+      createFailureLogEntry(message, messageText, code, crypto.randomUUID(), new Date().toISOString())
+    );
     return { ok: false, error: appError(code, messageText) };
   }
 }

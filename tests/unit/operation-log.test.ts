@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   appendOperationLog,
+  parseOperationLogEntry,
   sanitizeLogEntry,
   type OperationLogEntry
 } from '../../src/storage/operation-log';
@@ -23,6 +24,80 @@ describe('sanitizeLogEntry', () => {
     expect(JSON.stringify(sanitized)).not.toContain('secret-token');
     expect(JSON.stringify(sanitized)).not.toContain('secret-key');
     expect(JSON.stringify(sanitized)).not.toContain('user:pass');
+  });
+
+  it('递归清洗详情中的凭据并丢弃非日志字段', () => {
+    const unsafeFields = {
+      settings: { apiKey: 'settings-secret' },
+      assetId: 'asset-secret',
+      objectUrl: 'blob:https://example.com/object',
+      html: '<html>private html</html>'
+    };
+    const sanitized = sanitizeLogEntry({
+      id: 'log-2',
+      timestamp: '2026-08-31T10:00:00.000Z',
+      stage: 'ai',
+      outcome: 'failure',
+      message: '扩写失败',
+      displayTitle: 'Authorization: Bearer title-secret',
+      operationLabel: 'AI 扩写',
+      details: {
+        result: 'Cookie: sid=detail-secret',
+        error: 'apiKey=error-secret',
+        warnings: ['https://user:pass@example.com/item', 'Bearer warning-secret'],
+        draft: {
+          sourceUrl: 'https://user:pass@example.com/item',
+          title: '标题',
+          description: '描述',
+          selectedImageCount: 1,
+          videoName: 'video.mp4'
+        }
+      },
+      ...unsafeFields
+    });
+
+    const serialized = JSON.stringify(sanitized);
+    expect(serialized).not.toMatch(
+      /title-secret|detail-secret|error-secret|warning-secret|settings-secret|asset-secret|blob:|<html|user:pass/u
+    );
+    expect(sanitized.details?.draft?.sourceUrl).toBe('https://example.com/item');
+  });
+
+  it('保留旧版最小记录并丢弃格式无效的详情', () => {
+    const oldEntry = {
+      id: 'old-log',
+      timestamp: '2026-08-31T13:00:00.000Z',
+      stage: 'parse',
+      outcome: 'success',
+      message: '旧版解析完成'
+    };
+
+    expect(parseOperationLogEntry(oldEntry)).toEqual(oldEntry);
+    expect(
+      parseOperationLogEntry({
+        ...oldEntry,
+        details: { draft: { sourceUrl: 'javascript:alert(1)' } }
+      })
+    ).toEqual(oldEntry);
+  });
+
+  it('在错误文本中排除媒体对象地址、本地路径和资源标识', () => {
+    const sanitized = sanitizeLogEntry({
+      id: 'log-3',
+      timestamp: '2026-08-31T14:00:00.000Z',
+      stage: 'fill',
+      outcome: 'failure',
+      message: '图片预览失败：blob:https://extension.example/object',
+      details: {
+        error: 'assetId=asset-secret，authToken=auth-secret，文件位于 /Users/mint/private-image.png',
+        result: 'data:image/png;base64,cHJpdmF0ZS1iaW5hcnk=',
+        warnings: ['authToken=auth-secret']
+      }
+    });
+
+    expect(JSON.stringify(sanitized)).not.toMatch(
+      /blob:|asset-secret|auth-secret|\/Users\/mint|data:image|cHJpdmF0ZS1iaW5hcnk/u
+    );
   });
 });
 

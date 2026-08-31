@@ -1,4 +1,5 @@
 import { normalizeChatCompletionsUrl, type AiConnectionResult } from '../ai/client';
+import { createFailureLogEntry } from '../background/operation-log-factory';
 import type { ExpansionPreview } from '../ai/validation';
 import { getRequestedOrigin, normalizeHttpUrl } from '../background/permissions';
 import type { OperationResult } from '../domain/errors';
@@ -7,7 +8,7 @@ import { getRemoteImageUrl, type ParsedProduct, type ProductDraft } from '../dom
 import type { AiSettings } from '../domain/settings';
 import { createMediaStore } from '../storage/media-store';
 import { createLocalStore, type LocalStore, type StorageAreaLike } from '../storage/local-store';
-import type { OperationLogEntry, OperationStage } from '../storage/operation-log';
+import type { OperationLogEntry } from '../storage/operation-log';
 import type { FillResult } from '../xianyu/fill';
 import {
   parseXianyuLoginCheckResult,
@@ -59,20 +60,25 @@ async function requestOrigins(origins: readonly string[]): Promise<void> {
 async function requestOriginsWithLog(
   store: LocalStore,
   origins: readonly string[],
-  stage: OperationStage
+  message: RuntimeMessage
 ): Promise<void> {
   try {
     await requestOrigins(origins);
   } catch (error) {
-    const message = error instanceof Error ? error.message : '站点访问权限未授权';
-    await store.appendLog({
-      id: operationId(),
-      timestamp: new Date().toISOString(),
-      stage,
-      outcome: 'failure',
-      message,
-      code: 'PERMISSION_DENIED'
-    });
+    const errorMessage = error instanceof Error ? error.message : '站点访问权限未授权';
+    try {
+      await store.appendLog(
+        createFailureLogEntry(
+          message,
+          errorMessage,
+          'PERMISSION_DENIED',
+          operationId(),
+          new Date().toISOString()
+        )
+      );
+    } catch {
+      console.error('运行记录保存失败');
+    }
     throw error;
   }
 }
@@ -144,24 +150,27 @@ export function createBrowserSidePanelServices(): SidePanelServices {
 
     async parseProduct(url: string): Promise<ParsedProduct> {
       const normalized = normalizeHttpUrl(url);
-      await requestOriginsWithLog(store, [getRequestedOrigin(normalized.url)], 'parse');
-      return send<ParsedProduct>({
+      const message: RuntimeMessage = {
         type: 'PARSE_PRODUCT',
         operationId: operationId(),
         url: normalized.href
-      });
+      };
+      await requestOriginsWithLog(store, [getRequestedOrigin(normalized.url)], message);
+      return send<ParsedProduct>(message);
     },
 
     async testAiConnection(settings: AiSettings): Promise<AiConnectionResult> {
       const url = normalizeChatCompletionsUrl(settings.baseUrl);
-      await requestOriginsWithLog(store, [getRequestedOrigin(url)], 'ai');
-      return send<AiConnectionResult>({ type: 'TEST_AI_CONNECTION', settings });
+      const message: RuntimeMessage = { type: 'TEST_AI_CONNECTION', settings };
+      await requestOriginsWithLog(store, [getRequestedOrigin(url)], message);
+      return send<AiConnectionResult>(message);
     },
 
     async expandDraft(settings: AiSettings, draft: ProductDraft): Promise<ExpansionPreview> {
       const url = normalizeChatCompletionsUrl(settings.baseUrl);
-      await requestOriginsWithLog(store, [getRequestedOrigin(url)], 'ai');
-      return send<ExpansionPreview>({ type: 'EXPAND_DRAFT', settings, draft });
+      const message: RuntimeMessage = { type: 'EXPAND_DRAFT', settings, draft };
+      await requestOriginsWithLog(store, [getRequestedOrigin(url)], message);
+      return send<ExpansionPreview>(message);
     },
 
     async checkXianyuLogin(): Promise<XianyuLoginCheckResult> {
@@ -174,8 +183,9 @@ export function createBrowserSidePanelServices(): SidePanelServices {
     },
 
     async fillDraft(draft: ProductDraft): Promise<FillResult> {
-      await requestOriginsWithLog(store, sourceOrigins(draft), 'fill');
-      return send<FillResult>({ type: 'FILL_XIANYU_DRAFT', draft });
+      const message: RuntimeMessage = { type: 'FILL_XIANYU_DRAFT', draft };
+      await requestOriginsWithLog(store, sourceOrigins(draft), message);
+      return send<FillResult>(message);
     },
 
     async openXianyuLogin(): Promise<void> {

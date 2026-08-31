@@ -24,7 +24,7 @@ class MemoryStorageArea implements StorageAreaLike {
 
   remove(keys: string | string[]): Promise<void> {
     for (const key of Array.isArray(keys) ? keys : [keys]) {
-      delete this.data[key];
+      Reflect.deleteProperty(this.data, key);
     }
     return Promise.resolve();
   }
@@ -152,12 +152,9 @@ describe('createLocalStore', () => {
     const restored = await store.getDraft();
 
     expect(restored).toMatchObject({ title: '编辑标题' });
-    expect(restored?.images).toEqual([
-      expect.objectContaining({
-        id: 'recoverable-image',
-        location: expect.objectContaining({ kind: 'remote' })
-      })
-    ]);
+    expect(restored?.images).toHaveLength(1);
+    expect(restored?.images[0]?.id).toBe('recoverable-image');
+    expect(restored?.images[0]?.location.kind).toBe('remote');
     expect(restored?.warnings).toHaveLength(100);
     expect(restored?.warnings).toContain('已移除无法恢复的旧版图片');
     expect(area.data.productDraft).toEqual(restored);
@@ -177,5 +174,33 @@ describe('createLocalStore', () => {
     const logs = await store.getLogs();
     expect(logs).toHaveLength(1);
     expect(logs[0]?.message).toBe('Authorization: [已脱敏]');
+  });
+
+  it('读取运行记录时验证旧记录并只保留最新 100 条', async () => {
+    const area = new MemoryStorageArea();
+    area.data.operationLogs = [
+      {
+        id: 'old-log',
+        timestamp: '2026-08-31T12:00:00.000Z',
+        stage: 'parse',
+        outcome: 'success',
+        message: '旧版记录'
+      },
+      { id: 'invalid-log', message: '缺少必要字段' },
+      ...Array.from({ length: 101 }, (_, index) => ({
+        id: `log-${String(index)}`,
+        timestamp: '2026-08-31T12:00:00.000Z',
+        stage: 'fill',
+        outcome: 'success',
+        message: `记录 ${String(index)}`
+      }))
+    ];
+    const store = createLocalStore(area);
+
+    const logs = await store.getLogs();
+
+    expect(logs).toHaveLength(100);
+    expect(logs.some((entry) => entry.id === 'invalid-log')).toBe(false);
+    expect(logs.at(-1)?.id).toBe('log-100');
   });
 });
