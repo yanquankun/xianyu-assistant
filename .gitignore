@@ -1,6 +1,8 @@
 node_modules/
 .output/
 dist/
+dev-dist/
+.keys/
 .wxt/
 coverage/
 playwright-report/

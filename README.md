@@ -44,11 +44,17 @@ pnpm install
 pnpm dev
 ```
 
-该命令会生成开发版扩展并启动监听。若本机没有自动打开扩展调试浏览器，可在 `chrome://extensions` 中开启“开发者模式”，选择“加载已解压的扩展程序”，然后选择 `.output/chrome-mv3-dev`。`.output` 是 macOS 隐藏目录，在目录选择窗口中按 `Command + Shift + G` 并输入完整路径，或按 `Command + Shift + .` 显示隐藏文件。
+该命令不会另开临时浏览器，而是把开发版扩展直接输出到可见目录：
+
+```text
+dev-dist/xianyu-assistant-unpacked/
+```
+
+第一次使用时，在日常 Chrome 的 `chrome://extensions` 中开启“开发者模式”，选择“加载已解压的扩展程序”，然后选择该目录。保持 `pnpm dev` 运行；修改源码后，WXT 会实时重新构建，并自动热更新页面或重新加载扩展。
 
 ## 构建和打包
 
-生成 Chrome 应用商店 ZIP，并同时生成便于本地加载的可见目录：
+生成 CRX 安装包和 Chrome 应用商店 ZIP：
 
 ```bash
 pnpm build
@@ -58,18 +64,26 @@ pnpm build
 
 ```text
 dist/xianyu-assistant-0.1.0-chrome.zip
-dist/xianyu-assistant-unpacked/
+dist/xianyu-assistant-0.1.0-chrome.crx
 ```
 
-其中 ZIP 用于上传 Chrome 应用商店；本地调试时，在 `chrome://extensions` 中点击“加载已解压的扩展程序”，选择 `dist/xianyu-assistant-unpacked`。普通 macOS 和 Windows Chrome 不允许直接安装本地 CRX，因此 ZIP 也不能通过“加载已解压”安装。
+首次构建时，Chrome 会生成用于保持扩展 ID 稳定的私钥：
 
-如果只需要本地加载目录，可执行：
+```text
+.keys/xianyu-assistant.pem
+```
+
+`.keys` 已被 Git 忽略。请安全备份该私钥；丢失后重新打包会产生新的扩展 ID。后续构建会自动复用它。
+
+CRX 由本机 Google Chrome 打包。脚本会自动查找常见 Chrome 路径；使用非标准安装路径时，可以通过 `CHROME_BINARY` 指定可执行文件。ZIP 用于上传 Chrome 应用商店。普通 macOS 和 Windows Chrome 可能阻止直接安装本地 CRX，这是 Chrome 的分发限制，不代表 CRX 生成失败。
+
+如果需要检查生产版解压内容，可执行：
 
 ```bash
 pnpm build:unpacked
 ```
 
-`pnpm zip` 保留为 `pnpm build` 的兼容别名。完整的 Chrome 加载步骤见 [本地安装与验证](docs/本地安装与验证.md)。
+该命令会生成 `dist/xianyu-assistant-unpacked`，只用于生产构建的本地检查。日常开发应使用 `pnpm dev` 和 `dev-dist/xianyu-assistant-unpacked`。`pnpm zip` 保留为 `pnpm build` 的兼容别名。完整步骤见 [本地安装与验证](docs/本地安装与验证.md)。
 
 ## AI 配置
 

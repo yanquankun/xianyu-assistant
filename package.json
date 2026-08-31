@@ -10,7 +10,7 @@
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "prepare": "wxt prepare",
-    "dev": "wxt",
+    "dev": "wxt --config wxt.dev.config.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "wxt build && wxt build --mode e2e && playwright test",
