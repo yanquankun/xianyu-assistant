@@ -50,4 +50,26 @@ describe('ImagePicker', () => {
     expect(screen.getByRole('checkbox', { name: '选择商品图片 1' })).toBeDisabled();
     expect(screen.getByText('加载失败')).toBeVisible();
   });
+
+  it('已选择 9 张图片时禁用其余图片并说明上限', () => {
+    render(
+      <ImagePicker
+        images={Array.from({ length: 10 }, (_, index) => ({
+          id: `image-${String(index + 1)}`,
+          location: {
+            kind: 'remote' as const,
+            url: `https://img.example.com/${String(index + 1)}.png`,
+            extractedBy: 'dom' as const
+          },
+          selected: index < 9,
+          loadStatus: 'loaded' as const
+        }))}
+        onToggle={() => undefined}
+        onLoadStatus={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole('checkbox', { name: '选择商品图片 10' })).toBeDisabled();
+    expect(screen.getByText('已达 9 张图片上限')).toBeVisible();
+  });
 });

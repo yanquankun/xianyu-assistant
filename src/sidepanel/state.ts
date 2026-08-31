@@ -156,6 +156,13 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
       if (state.draft === null) {
         return state;
       }
+      {
+        const image = state.draft.images.find((candidate) => candidate.id === action.id);
+        const selectedCount = state.draft.images.filter((candidate) => candidate.selected).length;
+        if (image === undefined || (!image.selected && selectedCount >= 9)) {
+          return state;
+        }
+      }
       return {
         ...state,
         phase: 'editing',

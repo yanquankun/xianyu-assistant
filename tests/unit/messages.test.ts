@@ -145,4 +145,75 @@ describe('parseStoredProductDraft', () => {
       })
     ).toBe(false);
   });
+
+  it.each(['blob:temporary-image', 'data:image/png;base64,aGVsbG8=', 'javascript:alert(1)', '/image.jpg'])(
+    '迁移时移除非 HTTP(S) 旧版图片：%s',
+    (url) => {
+      const result = parseStoredProductDraft({
+        ...draft,
+        images: [
+          {
+            id: 'legacy-image',
+            url,
+            source: 'dom',
+            selected: true,
+            loadStatus: 'loaded'
+          }
+        ]
+      });
+
+      expect(result).toMatchObject({
+        migrated: true,
+        draft: {
+          images: [],
+          warnings: ['已移除无法恢复的旧版图片']
+        }
+      });
+    }
+  );
+
+  it.each(['blob:temporary-image', 'data:image/png;base64,aGVsbG8=', 'javascript:alert(1)', '/image.jpg'])(
+    '运行时消息拒绝非 HTTP(S) 远程图片：%s',
+    (url) => {
+      expect(
+        parseRuntimeMessage({
+          type: 'FILL_XIANYU_DRAFT',
+          draft: {
+            ...draft,
+            images: [
+              {
+                id: 'remote-image',
+                location: { kind: 'remote', url, extractedBy: 'dom' },
+                selected: true,
+                loadStatus: 'loaded'
+              }
+            ]
+          }
+        })
+      ).toBeNull();
+    }
+  );
+
+  it('运行时消息接受完整 HTTPS 远程图片', () => {
+    expect(
+      parseRuntimeMessage({
+        type: 'FILL_XIANYU_DRAFT',
+        draft: {
+          ...draft,
+          images: [
+            {
+              id: 'remote-image',
+              location: {
+                kind: 'remote',
+                url: 'https://img.example.com/remote.jpg',
+                extractedBy: 'dom'
+              },
+              selected: true,
+              loadStatus: 'loaded'
+            }
+          ]
+        }
+      })
+    ).not.toBeNull();
+  });
 });

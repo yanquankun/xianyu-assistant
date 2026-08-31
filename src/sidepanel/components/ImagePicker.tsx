@@ -10,8 +10,11 @@ export function ImagePicker({ images, onToggle, onLoadStatus }: ImagePickerProps
   if (images.length === 0) {
     return <p className="empty-note">没有解析到图片，可返回来源页面检查。</p>;
   }
+  const selectedCount = images.filter((image) => image.selected).length;
+  const selectionLimitReached = selectedCount >= 9;
   return (
     <div className="image-grid" aria-label="商品图片">
+      {selectionLimitReached ? <p>已达 9 张图片上限</p> : null}
       {images.map((image, index) => {
         const remoteUrl = getRemoteImageUrl(image);
         return (
@@ -32,7 +35,9 @@ export function ImagePicker({ images, onToggle, onLoadStatus }: ImagePickerProps
             <input
               type="checkbox"
               checked={image.selected}
-              disabled={image.loadStatus === 'failed'}
+              disabled={
+                image.loadStatus === 'failed' || (!image.selected && selectionLimitReached)
+              }
               onChange={() => onToggle(image.id)}
               aria-label={`选择商品图片 ${String(index + 1)}`}
             />

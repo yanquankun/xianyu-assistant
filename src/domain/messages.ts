@@ -73,12 +73,24 @@ function isRemoteImageExtractionSource(value: unknown): value is RemoteImageExtr
   return typeof value === 'string' && ['json-ld', 'open-graph', 'meta', 'dom'].includes(value);
 }
 
+function isHttpUrl(value: unknown): value is string {
+  if (!isText(value, 4_096, false) || value !== value.trim()) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function isProductImageLocation(value: unknown): value is ProductImageLocation {
   if (!isRecord(value) || typeof value.kind !== 'string') {
     return false;
   }
   if (value.kind === 'remote') {
-    return isText(value.url, 4_096, false) && isRemoteImageExtractionSource(value.extractedBy);
+    return isHttpUrl(value.url) && isRemoteImageExtractionSource(value.extractedBy);
   }
   return (
     value.kind === 'local' &&
@@ -156,7 +168,7 @@ function migrateLegacyImage(value: unknown): ProductImage | null {
   if (
     !isRecord(value) ||
     !isText(value.id, 200, false) ||
-    !isText(value.url, 4_096, false) ||
+    !isHttpUrl(value.url) ||
     !isRemoteImageExtractionSource(value.source) ||
     typeof value.selected !== 'boolean' ||
     typeof value.loadStatus !== 'string' ||
@@ -204,7 +216,7 @@ export function parseStoredProductDraft(value: unknown): StoredDraftParseResult 
   }
   if (removedImage && !warnings.includes('已移除无法恢复的旧版图片')) {
     if (warnings.length === 100) {
-      return null;
+      warnings.shift();
     }
     warnings.push('已移除无法恢复的旧版图片');
   }

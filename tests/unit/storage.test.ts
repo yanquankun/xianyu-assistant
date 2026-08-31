@@ -125,6 +125,44 @@ describe('createLocalStore', () => {
     expect(area.data.productDraft).toBeUndefined();
   });
 
+  it('迁移时警告已满仍保留草稿并移除损坏图片', async () => {
+    const area = new MemoryStorageArea();
+    area.data.productDraft = {
+      ...draft,
+      warnings: Array.from({ length: 100 }, (_, index) => `已有警告 ${String(index + 1)}`),
+      images: [
+        {
+          id: 'recoverable-image',
+          url: 'https://img.example.com/recoverable.jpg',
+          source: 'dom',
+          selected: true,
+          loadStatus: 'loaded'
+        },
+        {
+          id: 'broken-image',
+          url: 'blob:unrecoverable',
+          source: 'dom',
+          selected: true,
+          loadStatus: 'loaded'
+        }
+      ]
+    };
+    const store = createLocalStore(area);
+
+    const restored = await store.getDraft();
+
+    expect(restored).toMatchObject({ title: '编辑标题' });
+    expect(restored?.images).toEqual([
+      expect.objectContaining({
+        id: 'recoverable-image',
+        location: expect.objectContaining({ kind: 'remote' })
+      })
+    ]);
+    expect(restored?.warnings).toHaveLength(100);
+    expect(restored?.warnings).toContain('已移除无法恢复的旧版图片');
+    expect(area.data.productDraft).toEqual(restored);
+  });
+
   it('追加运行记录时持久化脱敏结果', async () => {
     const store = createLocalStore(new MemoryStorageArea());
 
