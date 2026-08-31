@@ -4,7 +4,16 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['.output/**', '.wxt/**', 'node_modules/**', 'coverage/**', 'playwright-report/**'] },
+  {
+    ignores: [
+      '.output/**',
+      '.wxt/**',
+      'dist/**',
+      'node_modules/**',
+      'coverage/**',
+      'playwright-report/**'
+    ]
+  },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   ...tseslint.configs.stylisticTypeChecked,
@@ -28,7 +37,7 @@ export default tseslint.config(
     }
   },
   {
-    files: ['*.config.{js,ts}'],
+    files: ['*.config.{js,ts}', 'scripts/**/*.mjs'],
     extends: [tseslint.configs.disableTypeChecked]
   }
 );

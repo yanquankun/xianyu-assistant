@@ -17,8 +17,9 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "check": "wxt prepare && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "build": "wxt build",
-    "zip": "wxt zip"
+    "build:unpacked": "wxt build && node scripts/collect-build-artifacts.mjs --unpacked-only",
+    "build": "wxt zip && node scripts/collect-build-artifacts.mjs",
+    "zip": "pnpm build"
   },
   "dependencies": {
     "react": "19.2.8",
