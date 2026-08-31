@@ -5,7 +5,8 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "noImplicitOverride": true,
-    "useUnknownInCatchVariables": true
+    "useUnknownInCatchVariables": true,
+    "jsx": "react-jsx"
   },
   "include": [
     ".wxt/wxt.d.ts",

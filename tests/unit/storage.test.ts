@@ -94,4 +94,20 @@ describe('createLocalStore', () => {
     await expect(store.getSettings()).resolves.toBeNull();
     await expect(store.getDraft()).resolves.toBeNull();
   });
+
+  it('追加运行记录时持久化脱敏结果', async () => {
+    const store = createLocalStore(new MemoryStorageArea());
+
+    await store.appendLog({
+      id: 'log-1',
+      timestamp: '2026-08-31T12:00:00.000Z',
+      stage: 'ai',
+      outcome: 'failure',
+      message: 'Authorization: Bearer secret-key'
+    });
+
+    const logs = await store.getLogs();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]?.message).toBe('Authorization: [已脱敏]');
+  });
 });

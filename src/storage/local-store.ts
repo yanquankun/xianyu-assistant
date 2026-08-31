@@ -1,8 +1,13 @@
 import type { ProductDraft } from '../domain/product';
 import type { AiSettings } from '../domain/settings';
+import {
+  appendOperationLog,
+  type OperationLogEntry
+} from './operation-log';
 
 const SETTINGS_KEY = 'aiSettings';
 const DRAFT_KEY = 'productDraft';
+const LOGS_KEY = 'operationLogs';
 
 export interface StorageAreaLike {
   get(keys: string | string[]): Promise<Record<string, unknown>>;
@@ -16,6 +21,8 @@ export interface LocalStore {
   saveSettings(settings: AiSettings): Promise<void>;
   getDraft(): Promise<ProductDraft | null>;
   saveDraft(draft: ProductDraft): Promise<void>;
+  getLogs(): Promise<OperationLogEntry[]>;
+  appendLog(entry: OperationLogEntry): Promise<void>;
 }
 
 function cloneValue<T>(value: T): T {
@@ -48,6 +55,15 @@ export function createLocalStore(storageArea: StorageAreaLike): LocalStore {
 
     async saveDraft(draft: ProductDraft): Promise<void> {
       await storageArea.set({ [DRAFT_KEY]: cloneValue(draft) });
+    },
+
+    async getLogs(): Promise<OperationLogEntry[]> {
+      return (await readValue<OperationLogEntry[]>(storageArea, LOGS_KEY)) ?? [];
+    },
+
+    async appendLog(entry: OperationLogEntry): Promise<void> {
+      const existing = await this.getLogs();
+      await storageArea.set({ [LOGS_KEY]: appendOperationLog(existing, entry) });
     }
   };
 }
