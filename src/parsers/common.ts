@@ -5,10 +5,12 @@ import type {
   ProductExtractionResponse,
   ProductPlatform
 } from '../domain/product';
-import { parseGeneric } from './generic';
-import { parseJdDom } from './jd';
-import { mergeProductCandidates } from './merge';
-import { parseTaobaoDom } from './taobao';
+import { parseProductIdentity } from '../domain/product-url';
+import { createEvidenceSet, mergeEvidenceSets, type EvidenceContext } from './evidence';
+import { collectGenericEvidence } from './generic';
+import { collectJdEvidence } from './jd';
+import { mergeProductEvidence } from './merge';
+import { collectTaobaoEvidence } from './taobao';
 
 const PAGE_ERROR_PATTERNS = [
   { pattern: /页面不存在/u, code: 'PAGE_ERROR' },
@@ -69,7 +71,7 @@ function isKnownProductRoute(platform: ProductPlatform, pageUrl: string): boolea
     return /^\/product\/[^/]+\.html$/u.test(pathname) ||
       (url.hostname.toLowerCase() === 'item.jd.com' && /^\/[^/]+\.html$/u.test(pathname));
   }
-  return platform === 'taobao' && pathname === '/item.htm';
+  return (platform === 'taobao' || platform === 'tmall') && pathname === '/item.htm';
 }
 
 function withHintedTitle(
@@ -96,38 +98,41 @@ function withHintedTitle(
   };
 }
 
-export function parseProductDocument(document: Document, pageUrl: string): ParsedProduct {
+export async function parseProductDocument(
+  document: Document,
+  pageUrl: string
+): Promise<ParsedProduct> {
   const pageError = detectProductPageError(document, pageUrl);
   if (pageError !== null) {
     throw new Error(pageError.message);
   }
   const normalized = normalizeHttpUrl(pageUrl);
-  const generic = parseGeneric(document, normalized.href, normalized.platform);
-  const platformCandidate =
-    normalized.platform === 'taobao'
-      ? parseTaobaoDom(document)
-      : normalized.platform === 'jd'
-        ? parseJdDom(document)
-        : null;
-  const candidates =
-    platformCandidate === null
-      ? generic.candidates
-      : [...generic.candidates, platformCandidate];
-  return {
-    ...mergeProductCandidates(candidates, normalized.href, generic.warnings),
-    platform: normalized.platform
+  const identity = parseProductIdentity(normalized.url);
+  const context: EvidenceContext = {
+    platform: normalized.platform,
+    pageUrl: identity?.canonicalUrl ?? normalized.href,
+    ...(identity?.productId === undefined ? {} : { productId: identity.productId }),
+    ...(identity?.skuId === undefined ? {} : { skuId: identity.skuId })
   };
+  const generic = collectGenericEvidence(document, context);
+  const platformEvidence =
+    normalized.platform === 'taobao' || normalized.platform === 'tmall'
+      ? collectTaobaoEvidence(document, context)
+      : normalized.platform === 'jd'
+        ? await collectJdEvidence(document, context)
+        : createEvidenceSet();
+  return mergeProductEvidence(mergeEvidenceSets(generic, platformEvidence), context);
 }
 
-export function extractProductDocument(
+export async function extractProductDocument(
   document: Document,
   pageUrl: string,
   hintedTitle?: string
-): ProductExtractionResponse {
+): Promise<ProductExtractionResponse> {
   const pageError = detectProductPageError(document, pageUrl);
   if (pageError !== null) {
     return { ok: false, error: pageError };
   }
-  const product = parseProductDocument(document, pageUrl);
+  const product = await parseProductDocument(document, pageUrl);
   return { ok: true, product: withHintedTitle(product, pageUrl, hintedTitle) };
 }

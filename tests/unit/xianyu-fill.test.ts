@@ -534,7 +534,7 @@ describe('prepareImages', () => {
           location: {
             kind: 'remote',
             url: 'https://img.example.com/remote.jpg',
-            extractedBy: 'dom'
+            extractedBy: 'semantic-dom'
           },
           loadStatus: 'loaded'
         }

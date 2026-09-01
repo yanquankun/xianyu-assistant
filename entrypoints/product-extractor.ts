@@ -35,7 +35,14 @@ export default defineUnlistedScript(() => {
     if (!isExtractMessage(message) || sender.id !== browser.runtime.id) {
       return undefined;
     }
-    sendResponse(extractProductDocument(document, window.location.href, message.hintedTitle));
+    void extractProductDocument(document, window.location.href, message.hintedTitle)
+      .then(sendResponse)
+      .catch((error: unknown) => {
+        sendResponse({
+          ok: false,
+          error: { message: error instanceof Error ? error.message : '商品解析失败' }
+        });
+      });
     return true;
   });
 });

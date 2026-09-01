@@ -88,7 +88,17 @@ export function isAiSettings(value: unknown): value is AiSettings {
 }
 
 function isRemoteImageExtractionSource(value: unknown): value is RemoteImageExtractionSource {
-  return typeof value === 'string' && ['json-ld', 'open-graph', 'meta', 'dom'].includes(value);
+  return (
+    typeof value === 'string' &&
+    [
+      'json-ld',
+      'open-graph',
+      'meta',
+      'semantic-dom',
+      'embedded-state',
+      'platform-gallery'
+    ].includes(value)
+  );
 }
 
 function isHttpUrl(value: unknown): value is string {
@@ -130,6 +140,13 @@ function isProductImage(value: unknown): value is ProductImage {
     typeof value.loadStatus === 'string' &&
     ['idle', 'loaded', 'failed'].includes(value.loadStatus)
   );
+}
+
+function migrateRemoteImageSource(value: unknown): RemoteImageExtractionSource | null {
+  if (value === 'dom') {
+    return 'semantic-dom';
+  }
+  return isRemoteImageExtractionSource(value) ? value : null;
 }
 
 function isProductVideo(value: unknown): value is ProductVideo {
@@ -189,8 +206,8 @@ function migrateStoredImage(value: unknown): ProductImage | null {
   if (
     !isRecord(value) ||
     !isText(value.id, 200, false) ||
-    typeof value.selected !== 'boolean' ||
-    !value.selected ||
+    (value.selected !== undefined && typeof value.selected !== 'boolean') ||
+    value.selected === false ||
     typeof value.loadStatus !== 'string' ||
     !['idle', 'loaded', 'failed'].includes(value.loadStatus)
   ) {
@@ -203,12 +220,24 @@ function migrateStoredImage(value: unknown): ProductImage | null {
       loadStatus: value.loadStatus as ProductImage['loadStatus']
     };
   }
-  if (!isHttpUrl(value.url) || !isRemoteImageExtractionSource(value.source)) {
+  if (isRecord(value.location) && value.location.kind === 'remote') {
+    const extractedBy = migrateRemoteImageSource(value.location.extractedBy);
+    if (!isHttpUrl(value.location.url) || extractedBy === null) {
+      return null;
+    }
+    return {
+      id: value.id,
+      location: { kind: 'remote', url: value.location.url, extractedBy },
+      loadStatus: value.loadStatus as ProductImage['loadStatus']
+    };
+  }
+  const extractedBy = migrateRemoteImageSource(value.source);
+  if (value.selected !== true || !isHttpUrl(value.url) || extractedBy === null) {
     return null;
   }
   return {
     id: value.id,
-    location: { kind: 'remote', url: value.url, extractedBy: value.source },
+    location: { kind: 'remote', url: value.url, extractedBy },
     loadStatus: value.loadStatus as ProductImage['loadStatus']
   };
 }

@@ -34,7 +34,7 @@ const readyDraft: ProductDraft = {
       location: {
         kind: 'remote',
         url: 'https://img.example.com/ready.jpg',
-        extractedBy: 'dom'
+        extractedBy: 'semantic-dom'
       },
       loadStatus: 'loaded'
     }
@@ -221,7 +221,7 @@ describe('App', () => {
         location: {
           kind: 'remote' as const,
           url: `https://img.example.com/${String(index + 1)}.jpg`,
-          extractedBy: 'dom' as const
+          extractedBy: 'semantic-dom' as const
         },
         loadStatus: 'loaded' as const
       }))
@@ -840,7 +840,7 @@ describe('App', () => {
           location: {
             kind: 'remote' as const,
             url: 'https://img.example.com/loaded.jpg',
-            extractedBy: 'dom' as const
+            extractedBy: 'semantic-dom' as const
           },
           loadStatus: 'loaded' as const
         },
@@ -849,7 +849,7 @@ describe('App', () => {
           location: {
             kind: 'remote' as const,
             url: 'https://img.example.com/pending.jpg',
-            extractedBy: 'dom' as const
+            extractedBy: 'semantic-dom' as const
           },
           loadStatus: 'idle' as const
         }

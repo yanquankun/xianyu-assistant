@@ -1,23 +1,11 @@
-import type { ProductPlatform } from '../domain/product';
-
-export type CandidateSource = 'json-ld' | 'open-graph' | 'meta' | 'dom';
-
-export interface ParseCandidate {
-  source: CandidateSource;
-  platform: ProductPlatform;
-  canonicalUrl?: string;
-  title?: string;
-  description?: string;
-  price?: number;
-  originalPrice?: number;
-  currency?: string;
-  images: string[];
-}
-
-export interface GenericParseResult {
-  candidates: ParseCandidate[];
-  warnings: string[];
-}
+import {
+  createEvidenceSet,
+  type EvidenceContext,
+  type FieldEvidence,
+  type ImageEvidence,
+  type PriceEvidence,
+  type ProductEvidenceSet
+} from './evidence';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -43,11 +31,10 @@ function flattenStructuredData(value: unknown): Record<string, unknown>[] {
   if (!isRecord(value)) {
     return [];
   }
-  const graph = value['@graph'];
-  return [value, ...flattenStructuredData(graph)];
+  return [value, ...flattenStructuredData(value['@graph'])];
 }
 
-function parsePrice(value: unknown): number | undefined {
+export function parsePrice(value: unknown): number | undefined {
   const text = typeof value === 'number' ? String(value) : asString(value);
   if (text === undefined) {
     return undefined;
@@ -62,7 +49,7 @@ function parsePrice(value: unknown): number | undefined {
 
 function readImages(value: unknown): string[] {
   if (typeof value === 'string') {
-    return [value];
+    return value.trim().length === 0 ? [] : [value.trim()];
   }
   if (Array.isArray(value)) {
     return value.flatMap(readImages);
@@ -80,19 +67,22 @@ function readOffer(value: unknown): { price?: number; currency?: string } {
     return {};
   }
   const price = parsePrice(offer.price ?? offer.lowPrice);
-  const currency = asString(offer.priceCurrency);
+  const currency = asString(offer.priceCurrency)?.toUpperCase();
   return {
     ...(price === undefined ? {} : { price }),
     ...(currency === undefined ? {} : { currency })
   };
 }
 
-function resolveUrl(value: string, pageUrl: string): string | null {
+export function resolveUrl(value: string, pageUrl: string): string | null {
   try {
     const url = new URL(value, pageUrl);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
       return null;
     }
+    url.username = '';
+    url.password = '';
+    url.hash = '';
     return url.href;
   } catch {
     return null;
@@ -104,113 +94,195 @@ function getMetaContent(document: Document, selector: string): string | undefine
   return content === undefined || content.length === 0 ? undefined : content;
 }
 
-function getCanonicalUrl(document: Document, pageUrl: string): string {
+function getCanonicalEvidence(
+  document: Document,
+  context: EvidenceContext
+): FieldEvidence<string> | null {
   const candidate = document.querySelector<HTMLLinkElement>('link[rel="canonical"]')?.href;
-  const resolved = candidate === undefined ? null : resolveUrl(candidate, pageUrl);
-  if (resolved !== null) {
-    return resolved;
-  }
-  const url = new URL(pageUrl);
-  url.hash = '';
-  return url.href;
+  const resolved = candidate === undefined ? null : resolveUrl(candidate, context.pageUrl);
+  return resolved === null
+    ? null
+    : { value: resolved, source: 'meta', confidence: 'medium', label: 'canonical' };
 }
 
-function parseJsonLd(document: Document, pageUrl: string, platform: ProductPlatform): GenericParseResult {
-  const candidates: ParseCandidate[] = [];
-  const warnings: string[] = [];
-  let malformed = false;
+function pushTextEvidence(
+  target: FieldEvidence<string>[],
+  value: string | undefined,
+  source: FieldEvidence<string>['source'],
+  confidence: FieldEvidence<string>['confidence'],
+  extra: Pick<FieldEvidence<string>, 'label' | 'productId' | 'skuId'> = {}
+): void {
+  if (value !== undefined) {
+    target.push({ value, source, confidence, ...extra });
+  }
+}
 
-  for (const script of document.querySelectorAll<HTMLScriptElement>('script[type="application/ld+json"]')) {
+function pushCnyPrice(
+  target: PriceEvidence[],
+  price: number | undefined,
+  currency: string | undefined,
+  source: PriceEvidence['source'],
+  confidence: PriceEvidence['confidence'],
+  extra: Pick<PriceEvidence, 'productId' | 'skuId'> = {}
+): void {
+  if (price !== undefined && (currency === undefined || currency === 'CNY')) {
+    target.push({ value: price, currency: 'CNY', kind: 'sale', source, confidence, ...extra });
+  }
+}
+
+function pushImages(
+  target: ImageEvidence[],
+  values: readonly string[],
+  source: ImageEvidence['source'],
+  confidence: ImageEvidence['confidence'],
+  startPosition = 0,
+  extra: Pick<ImageEvidence, 'productId' | 'skuId'> = {}
+): void {
+  values.forEach((value, index) => {
+    target.push({ value, source, confidence, position: startPosition + index, ...extra });
+  });
+}
+
+function collectJsonLd(document: Document, evidence: ProductEvidenceSet): void {
+  let malformed = false;
+  for (const script of document.querySelectorAll<HTMLScriptElement>(
+    'script[type="application/ld+json"]'
+  )) {
     try {
       const root: unknown = JSON.parse(script.textContent);
       for (const item of flattenStructuredData(root)) {
         if (!schemaTypeIncludes(item['@type'], 'Product')) {
           continue;
         }
-        const title = asString(item.name);
-        const description = asString(item.description);
+        const productId = asString(item.productID);
+        const skuId = asString(item.sku);
+        const binding = {
+          ...(productId === undefined ? {} : { productId }),
+          ...(skuId === undefined ? {} : { skuId })
+        };
+        pushTextEvidence(evidence.titles, asString(item.name), 'json-ld', 'high', binding);
+        pushTextEvidence(
+          evidence.descriptions,
+          asString(item.description),
+          'json-ld',
+          'high',
+          binding
+        );
         const offer = readOffer(item.offers);
-        candidates.push({
-          source: 'json-ld',
-          platform,
-          canonicalUrl: getCanonicalUrl(document, pageUrl),
-          ...(title === undefined ? {} : { title }),
-          ...(description === undefined ? {} : { description }),
-          ...(offer.price === undefined ? {} : { price: offer.price }),
-          ...(offer.currency === undefined ? {} : { currency: offer.currency }),
-          images: readImages(item.image)
-        });
+        pushCnyPrice(
+          evidence.prices,
+          offer.price,
+          offer.currency,
+          'json-ld',
+          'high',
+          binding
+        );
+        pushImages(
+          evidence.images,
+          readImages(item.image),
+          'json-ld',
+          'high',
+          evidence.images.length,
+          binding
+        );
       }
     } catch {
       malformed = true;
     }
   }
-
   if (malformed) {
-    warnings.push('页面结构化商品数据无法解析，已使用页面信息降级');
+    evidence.warnings.push('页面结构化商品数据无法解析，已使用页面信息降级');
   }
-  return { candidates, warnings };
 }
 
-function parseMetadata(document: Document, pageUrl: string, platform: ProductPlatform): ParseCandidate[] {
-  const ogImages = Array.from(
-    document.querySelectorAll<HTMLMetaElement>('meta[property="og:image"]')
-  )
-    .map((meta) => meta.content.trim())
-    .filter((value) => value.length > 0);
+function collectMetadata(document: Document, evidence: ProductEvidenceSet): void {
   const ogTitle = getMetaContent(document, 'meta[property="og:title"]');
   const ogDescription = getMetaContent(document, 'meta[property="og:description"]');
   const ogPrice = parsePrice(
     getMetaContent(document, 'meta[property="product:price:amount"]') ??
       getMetaContent(document, 'meta[property="og:price:amount"]')
   );
-  const currency =
+  const ogCurrency = (
     getMetaContent(document, 'meta[property="product:price:currency"]') ??
-    getMetaContent(document, 'meta[property="og:price:currency"]');
-  const canonicalUrl = getCanonicalUrl(document, pageUrl);
+    getMetaContent(document, 'meta[property="og:price:currency"]')
+  )?.toUpperCase();
+  const ogImages = Array.from(
+    document.querySelectorAll<HTMLMetaElement>('meta[property="og:image"]')
+  )
+    .map((meta) => meta.content.trim())
+    .filter((value) => value.length > 0);
 
-  const candidates: ParseCandidate[] = [];
-  if (
-    ogTitle !== undefined ||
-    ogDescription !== undefined ||
-    ogPrice !== undefined ||
-    ogImages.length > 0
-  ) {
-    candidates.push({
-      source: 'open-graph',
-      platform,
-      canonicalUrl,
-      ...(ogTitle === undefined ? {} : { title: ogTitle }),
-      ...(ogDescription === undefined ? {} : { description: ogDescription }),
-      ...(ogPrice === undefined ? {} : { price: ogPrice }),
-      ...(currency === undefined ? {} : { currency }),
-      images: ogImages
-    });
-  }
-
+  pushTextEvidence(evidence.titles, ogTitle, 'open-graph', 'medium');
+  pushTextEvidence(evidence.descriptions, ogDescription, 'open-graph', 'medium');
+  pushCnyPrice(evidence.prices, ogPrice, ogCurrency, 'open-graph', 'medium');
+  pushImages(evidence.images, ogImages, 'open-graph', 'medium', evidence.images.length);
+  pushTextEvidence(
+    evidence.descriptions,
+    getMetaContent(document, 'meta[name="description"]'),
+    'meta',
+    'medium'
+  );
   const pageTitle = document.title.trim();
-  if (pageTitle.length > 0) {
-    candidates.push({
-      source: 'meta',
-      platform,
-      canonicalUrl,
-      title: pageTitle,
-      images: []
-    });
-  }
-  return candidates;
+  pushTextEvidence(
+    evidence.titles,
+    pageTitle.length === 0 ? undefined : pageTitle,
+    'meta',
+    'low',
+    { label: 'page-title' }
+  );
 }
 
-export function parseGeneric(
+function semanticValue(element: Element): string | undefined {
+  const attribute =
+    element.getAttribute('content') ?? element.getAttribute('src') ?? element.getAttribute('href');
+  const value = (attribute ?? element.textContent).trim();
+  return value.length === 0 ? undefined : value;
+}
+
+function collectSemanticDom(document: Document, evidence: ProductEvidenceSet): void {
+  const name = document.querySelector('[itemprop~="name"]');
+  pushTextEvidence(
+    evidence.titles,
+    name === null ? undefined : semanticValue(name),
+    'semantic-dom',
+    'medium'
+  );
+  const description = document.querySelector('[itemprop~="description"]');
+  pushTextEvidence(
+    evidence.descriptions,
+    description === null ? undefined : semanticValue(description),
+    'semantic-dom',
+    'medium'
+  );
+  const price = document.querySelector('[itemprop~="price"]');
+  pushCnyPrice(
+    evidence.prices,
+    price === null ? undefined : parsePrice(semanticValue(price)),
+    price?.getAttribute('currency')?.toUpperCase() ??
+      price?.getAttribute('data-currency')?.toUpperCase(),
+    'semantic-dom',
+    'medium'
+  );
+  const imageValues = Array.from(document.querySelectorAll('[itemprop~="image"]')).flatMap(
+    (element) => {
+      const value = semanticValue(element);
+      return value === undefined ? [] : [value];
+    }
+  );
+  pushImages(evidence.images, imageValues, 'semantic-dom', 'medium', evidence.images.length);
+}
+
+export function collectGenericEvidence(
   document: Document,
-  pageUrl: string,
-  platform: ProductPlatform
-): GenericParseResult {
-  const structured = parseJsonLd(document, pageUrl, platform);
-  return {
-    candidates: [...structured.candidates, ...parseMetadata(document, pageUrl, platform)],
-    warnings: structured.warnings
-  };
+  context: EvidenceContext
+): ProductEvidenceSet {
+  const evidence = createEvidenceSet();
+  collectJsonLd(document, evidence);
+  collectMetadata(document, evidence);
+  collectSemanticDom(document, evidence);
+  const canonical = getCanonicalEvidence(document, context);
+  if (canonical !== null) {
+    evidence.canonicalUrls.push(canonical);
+  }
+  return evidence;
 }
-
-export { parsePrice, resolveUrl };

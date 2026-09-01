@@ -4,7 +4,13 @@ export type ExtractionConfidence = 'high' | 'medium' | 'low';
 
 export type ImageLoadStatus = 'idle' | 'loaded' | 'failed';
 
-export type RemoteImageExtractionSource = 'json-ld' | 'open-graph' | 'meta' | 'dom';
+export type RemoteImageExtractionSource =
+  | 'json-ld'
+  | 'open-graph'
+  | 'meta'
+  | 'semantic-dom'
+  | 'embedded-state'
+  | 'platform-gallery';
 
 export type ProductImageLocation =
   | {

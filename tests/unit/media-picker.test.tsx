@@ -25,7 +25,7 @@ const remoteImage: ProductImage = {
   location: {
     kind: 'remote',
     url: 'https://img.example.com/1.png',
-    extractedBy: 'dom'
+    extractedBy: 'semantic-dom'
   },
   loadStatus: 'loaded'
 };

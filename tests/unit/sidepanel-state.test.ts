@@ -50,7 +50,7 @@ describe('reduceWorkflow', () => {
       location: {
         kind: 'remote' as const,
         url: `https://img.example.com/${String(index + 1)}.jpg`,
-        extractedBy: 'dom' as const
+        extractedBy: 'semantic-dom' as const
       },
       loadStatus: 'loaded' as const
     }));
@@ -218,7 +218,7 @@ describe('reduceWorkflow', () => {
             location: {
               kind: 'remote',
               url: 'https://img.example.com/stored.jpg',
-              extractedBy: 'dom'
+              extractedBy: 'semantic-dom'
             },
             loadStatus: 'loaded'
           }
@@ -413,7 +413,7 @@ describe('reduceWorkflow', () => {
             location: {
               kind: 'remote' as const,
               url: 'https://img.example.com/1.jpg',
-              extractedBy: 'dom' as const
+              extractedBy: 'semantic-dom' as const
             },
             loadStatus: 'idle' as const
           },
@@ -422,7 +422,7 @@ describe('reduceWorkflow', () => {
             location: {
               kind: 'remote' as const,
               url: 'https://img.example.com/2.jpg',
-              extractedBy: 'dom' as const
+              extractedBy: 'semantic-dom' as const
             },
             loadStatus: 'idle' as const
           }
@@ -450,7 +450,7 @@ describe('reduceWorkflow', () => {
       location: {
         kind: 'remote' as const,
         url: `https://img.example.com/${String(index)}.jpg`,
-        extractedBy: 'dom' as const
+        extractedBy: 'semantic-dom' as const
       },
       loadStatus: 'loaded' as const
     }));

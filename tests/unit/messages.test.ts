@@ -268,7 +268,7 @@ describe('parseStoredProductDraft', () => {
       location: {
         kind: 'remote',
         url: 'https://img.example.com/remote.jpg',
-        extractedBy: 'dom'
+        extractedBy: 'semantic-dom'
       },
       loadStatus: 'loaded'
     };
@@ -309,7 +309,7 @@ describe('parseStoredProductDraft', () => {
         location: {
           kind: 'remote',
           url: 'https://img.example.com/a.jpg',
-          extractedBy: 'dom'
+          extractedBy: 'semantic-dom'
         },
         loadStatus: 'loaded'
       }
@@ -367,7 +367,7 @@ describe('parseStoredProductDraft', () => {
           images: [
             {
               id: 'remote-image',
-              location: { kind: 'remote', url, extractedBy: 'dom' },
+              location: { kind: 'remote', url, extractedBy: 'semantic-dom' },
               selected: true,
               loadStatus: 'loaded'
             }
@@ -389,7 +389,7 @@ describe('parseStoredProductDraft', () => {
               location: {
                 kind: 'remote',
                 url: 'https://img.example.com/remote.jpg',
-                extractedBy: 'dom'
+                extractedBy: 'semantic-dom'
               },
               loadStatus: 'loaded'
             }

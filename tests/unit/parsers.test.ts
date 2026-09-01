@@ -9,6 +9,9 @@ import {
   extractProductDocument,
   parseProductDocument
 } from '../../src/parsers/common';
+import { createEvidenceSet } from '../../src/parsers/evidence';
+import { collectGenericEvidence } from '../../src/parsers/generic';
+import { mergeProductEvidence } from '../../src/parsers/merge';
 
 function parseFixture(name: string, pageUrl: string) {
   const html = readFileSync(resolve(process.cwd(), 'tests', 'fixtures', name), 'utf8');
@@ -16,9 +19,203 @@ function parseFixture(name: string, pageUrl: string) {
   return parseProductDocument(document, pageUrl);
 }
 
+describe('field-level product evidence', () => {
+  it('分别选择高可信标题、价格、描述和图片', () => {
+    const result = mergeProductEvidence(
+      {
+        titles: [
+          {
+            value: '页面标题 - 京东',
+            source: 'meta',
+            confidence: 'low',
+            label: 'page-title'
+          },
+          {
+            value: '当前 SKU 标题',
+            source: 'embedded-state',
+            confidence: 'high',
+            skuId: '100'
+          }
+        ],
+        descriptions: [
+          { value: '普通 meta 描述', source: 'meta', confidence: 'medium' }
+        ],
+        prices: [
+          {
+            value: 2090,
+            currency: 'CNY',
+            kind: 'original',
+            source: 'embedded-state',
+            confidence: 'high',
+            skuId: '100'
+          },
+          {
+            value: 1881,
+            currency: 'CNY',
+            kind: 'conditional',
+            source: 'embedded-state',
+            confidence: 'high',
+            skuId: '100',
+            label: '到手价'
+          }
+        ],
+        images: [
+          {
+            value: 'https://img.example.com/a.jpg',
+            source: 'platform-gallery',
+            confidence: 'high',
+            position: 0
+          }
+        ],
+        canonicalUrls: [],
+        warnings: []
+      },
+      {
+        platform: 'jd',
+        pageUrl: 'https://item.jd.com/100.html',
+        productId: '100',
+        skuId: '100'
+      }
+    );
+
+    expect(result).toMatchObject({
+      title: '当前 SKU 标题',
+      description: '普通 meta 描述',
+      price: 1881,
+      originalPrice: 2090
+    });
+    expect(result.warnings).toContain('当前售价为到手价，请发布前核对适用条件');
+  });
+
+  it('通用采集器读取普通描述 Meta，但忽略没有商品语义的 h1', () => {
+    const document = new DOMParser().parseFromString(
+      '<!doctype html><html><head><meta name="description" content="普通描述" /></head><body><h1>频道标题</h1></body></html>',
+      'text/html'
+    );
+    const evidence = collectGenericEvidence(document, {
+      platform: 'generic',
+      pageUrl: 'https://shop.example.com/channel'
+    });
+
+    expect(evidence.descriptions).toEqual([
+      { value: '普通描述', source: 'meta', confidence: 'medium' }
+    ]);
+    expect(evidence.titles).toEqual([]);
+  });
+
+  it('忽略绑定到其他 SKU 的价格和其他商品的推荐图片', () => {
+    const evidence = createEvidenceSet();
+    evidence.titles.push({
+      value: '当前商品',
+      source: 'embedded-state',
+      confidence: 'high',
+      productId: '100'
+    });
+    evidence.prices.push({
+      value: 99,
+      currency: 'CNY',
+      kind: 'sale',
+      source: 'embedded-state',
+      confidence: 'high',
+      skuId: 'other-sku'
+    });
+    evidence.images.push({
+      value: 'https://img.example.com/recommendation.jpg',
+      source: 'platform-gallery',
+      confidence: 'high',
+      productId: 'other-product',
+      position: 0
+    });
+
+    const result = mergeProductEvidence(evidence, {
+      platform: 'jd',
+      pageUrl: 'https://item.jd.com/100.html',
+      productId: '100',
+      skuId: '100'
+    });
+
+    expect(result.title).toBe('当前商品');
+    expect(result.price).toBeNull();
+    expect(result.images).toEqual([]);
+  });
+
+  it('仅合并已知商品 CDN 的缩放变体，并保留未知主机的签名 URL', () => {
+    const evidence = createEvidenceSet();
+    evidence.images.push(
+      {
+        value: 'https://img10.360buyimg.com/n1/s450x450_jfs/t1/a.jpg?size=large',
+        highResolutionUrl: 'https://img10.360buyimg.com/n1/s800x800_jfs/t1/a.jpg',
+        source: 'platform-gallery',
+        confidence: 'high',
+        position: 0
+      },
+      {
+        value: 'https://img10.360buyimg.com/n5/s54x54_jfs/t1/a.jpg?size=small',
+        source: 'platform-gallery',
+        confidence: 'high',
+        position: 1
+      },
+      {
+        value: 'https://cdn.example.com/a.jpg?signature=one',
+        source: 'open-graph',
+        confidence: 'medium',
+        position: 2
+      },
+      {
+        value: 'https://cdn.example.com/a.jpg?signature=two',
+        source: 'open-graph',
+        confidence: 'medium',
+        position: 3
+      }
+    );
+
+    const result = mergeProductEvidence(evidence, {
+      platform: 'jd',
+      pageUrl: 'https://item.jd.com/100.html',
+      productId: '100'
+    });
+
+    expect(result.images.map(getRemoteImageUrl)).toEqual([
+      'https://img10.360buyimg.com/n1/s800x800_jfs/t1/a.jpg',
+      'https://cdn.example.com/a.jpg?signature=one',
+      'https://cdn.example.com/a.jpg?signature=two'
+    ]);
+  });
+
+  it('丢弃不高于售价的显式原价并给出警告', () => {
+    const evidence = createEvidenceSet();
+    evidence.prices.push(
+      {
+        value: 100,
+        currency: 'CNY',
+        kind: 'sale',
+        source: 'embedded-state',
+        confidence: 'high'
+      },
+      {
+        value: 99,
+        currency: 'CNY',
+        kind: 'original',
+        source: 'embedded-state',
+        confidence: 'high'
+      }
+    );
+
+    const result = mergeProductEvidence(evidence, {
+      platform: 'jd',
+      pageUrl: 'https://item.jd.com/100.html',
+      productId: '100'
+    });
+
+    expect(result.price).toBe(100);
+    expect(result.originalPrice).toBeUndefined();
+    expect(result.warnings).toContain('原价不高于售价，已忽略，请发布前核对');
+  });
+});
+
 describe('parseProductDocument', () => {
-  it('从淘宝夹具合并结构化标题、价格和去重图片', () => {
-    const result = parseFixture(
+  it('从淘宝夹具合并结构化标题、价格和图片', async () => {
+    const result = await parseFixture(
       'taobao-product.html',
       'https://item.taobao.com/item.htm?id=1#detail'
     );
@@ -30,13 +227,14 @@ describe('parseProductDocument', () => {
     expect(result.price).toBe(99.9);
     expect(result.images.map(getRemoteImageUrl)).toEqual([
       'https://img.example.com/a.jpg?size=large',
+      'https://img.example.com/a.jpg?size=small',
       'https://img.example.com/b.jpg'
     ]);
     expect(result.confidence).toBe('high');
   });
 
-  it('从京东夹具读取结构化商品信息并规范协议相对图片', () => {
-    const result = parseFixture('jd-product.html', 'https://item.jd.com/1.html');
+  it('从京东夹具读取结构化商品信息并规范协议相对图片', async () => {
+    const result = await parseFixture('jd-product.html', 'https://item.jd.com/1.html');
 
     expect(result.platform).toBe('jd');
     expect(result.title).toBe('京东结构化商品');
@@ -50,7 +248,7 @@ describe('parseProductDocument', () => {
     ]);
   });
 
-  it('结构化数据损坏时使用通用 Open Graph 降级', () => {
+  it('结构化数据损坏时使用通用 Open Graph 降级', async () => {
     const document = new DOMParser().parseFromString(
       `<!doctype html><html><head>
         <meta property="og:title" content="通用商品" />
@@ -63,7 +261,7 @@ describe('parseProductDocument', () => {
       'text/html'
     );
 
-    const result = parseProductDocument(document, 'https://shop.example.com/product/1');
+    const result = await parseProductDocument(document, 'https://shop.example.com/product/1');
 
     expect(result.platform).toBe('generic');
     expect(result.title).toBe('通用商品');
@@ -73,13 +271,13 @@ describe('parseProductDocument', () => {
     expect(result.confidence).toBe('medium');
   });
 
-  it('没有有效价格时保留空值并返回警告', () => {
+  it('没有有效价格时保留空值并返回警告', async () => {
     const document = new DOMParser().parseFromString(
       '<!doctype html><html><head><title>只有标题</title></head><body></body></html>',
       'text/html'
     );
 
-    const result = parseProductDocument(document, 'https://shop.example.com/product/2');
+    const result = await parseProductDocument(document, 'https://shop.example.com/product/2');
 
     expect(result.title).toBe('只有标题');
     expect(result.price).toBeNull();
@@ -87,7 +285,7 @@ describe('parseProductDocument', () => {
     expect(result.confidence).toBe('low');
   });
 
-  it('页面图片过多时只保留共享媒体上限允许的前 9 张', () => {
+  it('页面图片过多时只保留共享媒体上限允许的前 9 张', async () => {
     const images = Array.from(
       { length: 25 },
       (_, index) => `<meta property="og:image" content="/image-${String(index + 1)}.jpg" />`
@@ -97,7 +295,10 @@ describe('parseProductDocument', () => {
       'text/html'
     );
 
-    const result = parseProductDocument(document, 'https://shop.example.com/product/many-images');
+    const result = await parseProductDocument(
+      document,
+      'https://shop.example.com/product/many-images'
+    );
 
     expect(result.images).toHaveLength(9);
     const finalImage = result.images.at(-1);
@@ -115,7 +316,7 @@ describe('parseProductDocument', () => {
     ['页面不存在', 'PAGE_ERROR'],
     ['访问出错', 'PAGE_ERROR'],
     ['系统繁忙', 'PAGE_ERROR']
-  ])('在候选解析前拒绝错误页标题：%s', (title, code) => {
+  ])('在候选解析前拒绝错误页标题：%s', async (title, code) => {
     const document = new DOMParser().parseFromString(
       `<!doctype html><html><head><title>${title}</title></head><body>${title}</body></html>`,
       'text/html'
@@ -124,7 +325,7 @@ describe('parseProductDocument', () => {
     expect(detectProductPageError(document, 'https://item.jd.com/product/100.html')).toMatchObject({
       code
     });
-    const result = extractProductDocument(
+    const result = await extractProductDocument(
       document,
       'https://item.jd.com/product/100.html',
       '分享文案标题'
@@ -140,14 +341,17 @@ describe('parseProductDocument', () => {
   it.each([
     ['售价 500 元，正常商品文案', '正常售价商品'],
     ['型号 404 限量版，不是错误页', '正常型号商品']
-  ])('不把正文中的裸状态码数字当作 HTTP 错误：%s', (bodyText, title) => {
+  ])('不把正文中的裸状态码数字当作 HTTP 错误：%s', async (bodyText, title) => {
     const document = new DOMParser().parseFromString(
       `<!doctype html><html><head><meta property="og:title" content="${title}" /></head><body>${bodyText}</body></html>`,
       'text/html'
     );
 
     expect(detectProductPageError(document, 'https://item.jd.com/product/100.html')).toBeNull();
-    const result = extractProductDocument(document, 'https://item.jd.com/product/100.html');
+    const result = await extractProductDocument(
+      document,
+      'https://item.jd.com/product/100.html'
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) {
       throw new Error('正常商品页不应被拒绝');
@@ -173,31 +377,34 @@ describe('parseProductDocument', () => {
   it.each([
     ['https://item.jd.com/product/100.html', 'jd'],
     ['https://item.taobao.com/item.htm?id=1', 'taobao'],
-    ['https://detail.tmall.com/item.htm?id=1', 'taobao']
-  ] as const)('仅在有效 %s 商品路由缺少真实标题时使用分享标题', (pageUrl, platform) => {
+    ['https://detail.tmall.com/item.htm?id=1', 'tmall']
+  ] as const)(
+    '仅在有效 %s 商品路由缺少真实标题时使用分享标题',
+    async (pageUrl, platform) => {
     const document = new DOMParser().parseFromString(
       '<!doctype html><html><body></body></html>',
       'text/html'
     );
-    const result = extractProductDocument(document, pageUrl, '分享文案标题');
+      const result = await extractProductDocument(document, pageUrl, '分享文案标题');
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error('有效商品页应产生商品');
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error('有效商品页应产生商品');
+      }
+      expect(result.product.platform).toBe(platform);
+      expect(result.product.title).toBe('分享文案标题');
+      expect(result.product.price).toBeNull();
+      expect(result.product.images).toEqual([]);
+      expect(result.product.warnings).toContain('标题来自分享文案，请核对');
     }
-    expect(result.product.platform).toBe(platform);
-    expect(result.product.title).toBe('分享文案标题');
-    expect(result.product.price).toBeNull();
-    expect(result.product.images).toEqual([]);
-    expect(result.product.warnings).toContain('标题来自分享文案，请核对');
-  });
+  );
 
-  it('真实页面标题优先于分享标题', () => {
+  it('真实页面标题优先于分享标题', async () => {
     const document = new DOMParser().parseFromString(
       '<!doctype html><html><head><title>真实页面标题</title></head></html>',
       'text/html'
     );
-    const result = extractProductDocument(
+    const result = await extractProductDocument(
       document,
       'https://item.jd.com/product/100.html',
       '分享文案标题'
@@ -212,12 +419,12 @@ describe('parseProductDocument', () => {
     '请完成安全验证',
     '检测到访问风险，请完成验证',
     '扫码登录后继续'
-  ])('DOM 正文指向验证或登录页面时拒绝分享标题：%s', (bodyText) => {
+  ])('DOM 正文指向验证或登录页面时拒绝分享标题：%s', async (bodyText) => {
     const document = new DOMParser().parseFromString(
       `<!doctype html><html><body>${bodyText}</body></html>`,
       'text/html'
     );
-    const result = extractProductDocument(
+    const result = await extractProductDocument(
       document,
       'https://item.jd.com/product/100.html',
       '不得使用的分享标题'
@@ -235,12 +442,12 @@ describe('parseProductDocument', () => {
     'https://item.jd.com/login',
     'https://item.jd.com/verify/captcha',
     'https://item.jd.com/error/400.html'
-  ])('普通页、登录页、验证页或错误路由不得使用分享标题：%s', (pageUrl) => {
+  ])('普通页、登录页、验证页或错误路由不得使用分享标题：%s', async (pageUrl) => {
     const document = new DOMParser().parseFromString(
       '<!doctype html><html><body></body></html>',
       'text/html'
     );
-    const result = extractProductDocument(document, pageUrl, '不得使用的标题');
+    const result = await extractProductDocument(document, pageUrl, '不得使用的标题');
 
     expect(JSON.stringify(result)).not.toContain('不得使用的标题');
   });
