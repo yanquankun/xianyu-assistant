@@ -1,8 +1,11 @@
-.media-file-input {
+.field .media-file-input {
   block-size: 0.1rem;
+  height: 0.1rem;
   inline-size: 0.1rem;
+  width: 0.1rem;
   opacity: 0;
   overflow: hidden;
+  pointer-events: none;
   position: absolute;
 }
 
@@ -78,24 +81,88 @@
 }
 
 .media-preview-dialog {
+  inline-size: min(100%, 46rem);
+  max-block-size: calc(100vh - 2rem);
+  overflow: hidden;
+  border: 0.0625rem solid rgb(255 255 255 / 18%);
+  border-radius: 0.75rem;
   background: #fff;
-  border-radius: 1rem;
   box-shadow: 0 1rem 3rem rgb(15 23 42 / 35%);
   box-sizing: border-box;
-  max-block-size: 96vh;
-  max-inline-size: 96vw;
-  overflow: auto;
-  padding: 1rem;
 }
 
-.media-preview-dialog img,
-.media-preview-dialog video {
+.media-preview-dialog__heading {
+  min-block-size: 3.5rem;
+  padding: 0.75rem 0.85rem 0.75rem 1rem;
+  border-block-end: 0.0625rem solid var(--line, #e1e3e6);
+}
+
+.media-preview-dialog__heading h2 {
+  min-inline-size: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.media-preview-dialog__close {
+  display: grid;
+  flex: 0 0 auto;
+  width: 2.25rem;
+  height: 2.25rem;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: var(--muted, #71757a);
+}
+
+.media-preview-dialog__close:hover {
+  background: var(--surface-soft, #f7f8f9);
+  color: var(--ink, #202124);
+}
+
+.media-preview-dialog__close:focus-visible {
+  outline: 0.125rem solid #1a73e8;
+  outline-offset: 0.125rem;
+}
+
+.media-preview-dialog__close svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.8;
+}
+
+.media-preview-dialog__body {
+  display: grid;
+  max-block-size: calc(100vh - 7.5rem);
+  min-block-size: 8rem;
+  place-items: center;
+  overflow: auto;
+  padding: 0.75rem;
+  background: #f1f2f4;
+}
+
+.media-preview-dialog__body img,
+.media-preview-dialog__body video {
   block-size: auto;
   display: block;
+  max-block-size: calc(100vh - 9rem);
+  max-inline-size: 100%;
+  border-radius: 0.375rem;
+}
+
+.media-preview-dialog__body video {
+  inline-size: 100%;
+  background: #111214;
+}
+
+.media-preview-dialog__body img {
   inline-size: auto;
-  margin-block-start: 1rem;
-  max-block-size: 78vh;
-  max-inline-size: 88vw;
 }
 
 .media-preview-spinner {

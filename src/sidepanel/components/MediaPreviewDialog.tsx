@@ -58,17 +58,28 @@ export function MediaPreviewDialog({ media, onClose }: MediaPreviewDialogProps) 
       >
         <div className="media-preview-dialog__heading">
           <h2>{media.label}</h2>
-          <button ref={closeButtonRef} type="button" className="button button--quiet" onClick={onClose}>
-            关闭媒体预览
+          <button
+            ref={closeButtonRef}
+            type="button"
+            className="media-preview-dialog__close"
+            aria-label="关闭媒体预览"
+            title="关闭"
+            onClick={onClose}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6.75 6.75 10.5 10.5m0-10.5-10.5 10.5" />
+            </svg>
           </button>
         </div>
-        {source === undefined ? (
-          <div className="media-preview-spinner" role="status" aria-label="正在加载媒体预览" />
-        ) : media.kind === 'video' ? (
-          <video controls src={source} aria-label={media.label} />
-        ) : (
-          <img src={source} alt={media.label} />
-        )}
+        <div className="media-preview-dialog__body">
+          {source === undefined ? (
+            <div className="media-preview-spinner" role="status" aria-label="正在加载媒体预览" />
+          ) : media.kind === 'video' ? (
+            <video controls playsInline src={source} aria-label={media.label} />
+          ) : (
+            <img src={source} alt={media.label} />
+          )}
+        </div>
       </section>
     </div>
   );

@@ -104,6 +104,9 @@ export function App({ services }: { services: SidePanelServices }) {
   const initializationGenerationRef = useRef(0);
   const imageUploadRequestRef = useRef(0);
   const videoUploadRequestRef = useRef(0);
+  const mediaSlotReservationsRef = useRef(
+    new Map<string, { draftId: string; count: number }>()
+  );
   const loginCheckRequestRef = useRef(0);
   const pendingMediaAssetIdsRef = useRef(new Set<string>());
 
@@ -438,12 +441,20 @@ export function App({ services }: { services: SidePanelServices }) {
     }
     const draftId = state.draft.id;
     const requestToken = imageUploadRequestRef.current + 1;
+    const reservationKey = `image-${String(requestToken)}`;
     imageUploadRequestRef.current = requestToken;
     setIsUploadingImages(true);
     try {
       const remainingSlots =
-        MAX_MEDIA_COUNT - state.draft.images.length - state.draft.videos.length;
+        MAX_MEDIA_COUNT -
+        state.draft.images.length -
+        state.draft.videos.length -
+        getReservedMediaSlots(draftId, mediaSlotReservationsRef.current);
       const validation = validateImageBatch(files, remainingSlots);
+      mediaSlotReservationsRef.current.set(reservationKey, {
+        draftId,
+        count: validation.accepted.length
+      });
       const rejected = [...validation.rejected];
       const savedImages: ProductDraft['images'] = [];
       for (const file of validation.accepted) {
@@ -511,6 +522,7 @@ export function App({ services }: { services: SidePanelServices }) {
         ...(notice === undefined ? {} : { notice })
       });
     } finally {
+      mediaSlotReservationsRef.current.delete(reservationKey);
       if (imageUploadRequestRef.current === requestToken) {
         setIsUploadingImages(false);
       }
@@ -523,12 +535,43 @@ export function App({ services }: { services: SidePanelServices }) {
     }
     const draftId = state.draft.id;
     const requestToken = videoUploadRequestRef.current + 1;
+    const reservationKey = `video-${String(requestToken)}`;
     videoUploadRequestRef.current = requestToken;
     setIsUploadingVideos(true);
     try {
       const rejected: { fileName: string; reason: string }[] = [];
-      const savedVideos: ProductDraft['videos'] = [];
+      const acceptedFiles: {
+        file: File;
+        mimeType: 'video/mp4' | 'video/quicktime';
+      }[] = [];
+      const remainingSlots = Math.max(
+        0,
+        MAX_MEDIA_COUNT -
+          state.draft.images.length -
+          state.draft.videos.length -
+          getReservedMediaSlots(draftId, mediaSlotReservationsRef.current)
+      );
       for (const file of files) {
+        const validation = validateVideo(file);
+        if (!validation.ok) {
+          rejected.push({ fileName: file.name, reason: validation.reason });
+          continue;
+        }
+        if (acceptedFiles.length >= remainingSlots) {
+          rejected.push({
+            fileName: file.name,
+            reason: `图片和视频合计最多只能添加 ${String(MAX_MEDIA_COUNT)} 个`
+          });
+          continue;
+        }
+        acceptedFiles.push({ file, mimeType: validation.mimeType });
+      }
+      mediaSlotReservationsRef.current.set(reservationKey, {
+        draftId,
+        count: acceptedFiles.length
+      });
+      const savedVideos: ProductDraft['videos'] = [];
+      for (const { file, mimeType } of acceptedFiles) {
         if (!isVideoUploadCurrent(draftId, requestToken, latestDraftRef, videoUploadRequestRef)) {
           break;
         }
@@ -544,13 +587,8 @@ export function App({ services }: { services: SidePanelServices }) {
           });
           continue;
         }
-        const validation = validateVideo(file);
-        if (!validation.ok) {
-          rejected.push({ fileName: file.name, reason: validation.reason });
-          continue;
-        }
         try {
-          const normalizedFile = createValidatedVideoFile(file, validation.mimeType);
+          const normalizedFile = createValidatedVideoFile(file, mimeType);
           const stored = await services.saveMedia(normalizedFile, 'video');
           pendingMediaAssetIdsRef.current.add(stored.assetId);
           const latestDraft = latestDraftRef.current;
@@ -595,6 +633,7 @@ export function App({ services }: { services: SidePanelServices }) {
         ...(notice === undefined ? {} : { notice })
       });
     } finally {
+      mediaSlotReservationsRef.current.delete(reservationKey);
       if (videoUploadRequestRef.current === requestToken) {
         setIsUploadingVideos(false);
       }
@@ -700,12 +739,18 @@ export function App({ services }: { services: SidePanelServices }) {
                   <span className="step-number">01</span>
                 </div>
                 <div className="field">
-                  <label htmlFor="source-url">商品链接</label>
+                  <div className="field-label-row">
+                    <label htmlFor="source-url">商品链接</label>
+                    <span id="source-login-reminder" className="field-hint">
+                      解析前请先登录对应平台
+                    </span>
+                  </div>
                   <div className="input-action">
                     <input
                       ref={sourceInputRef}
                       id="source-url"
                       type="url"
+                      aria-describedby="source-login-reminder"
                       value={state.sourceUrl}
                       placeholder="粘贴淘宝或京东商品链接"
                       onChange={(event) =>
@@ -900,6 +945,19 @@ function createValidatedVideoFile(file: File, mimeType: 'video/mp4' | 'video/qui
   return file.type === mimeType
     ? file
     : new File([file], file.name, { type: mimeType, lastModified: file.lastModified });
+}
+
+function getReservedMediaSlots(
+  draftId: string,
+  reservations: ReadonlyMap<string, { draftId: string; count: number }>
+): number {
+  let count = 0;
+  for (const reservation of reservations.values()) {
+    if (reservation.draftId === draftId) {
+      count += reservation.count;
+    }
+  }
+  return count;
 }
 
 async function discardMedia(

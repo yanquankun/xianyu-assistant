@@ -2,6 +2,7 @@ import type { Ref } from 'react';
 
 import type { ImageLoadStatus, ProductDraft } from '../../domain/product';
 import type { StoredMediaAsset } from '../../storage/media-store';
+import { CustomSelect } from './CustomSelect';
 import { MediaPicker } from './MediaPicker';
 
 interface ProductEditorProps {
@@ -24,6 +25,12 @@ const PLATFORM_LABELS: Record<ProductDraft['platform'], string> = {
   jd: '京东来源',
   generic: '其他来源'
 };
+
+const SHIPPING_OPTIONS = [
+  { value: '包邮', label: '包邮' },
+  { value: '邮费另议', label: '邮费另议' },
+  { value: '无需邮寄', label: '无需邮寄' }
+] as const;
 
 export function ProductEditor({
   draft,
@@ -120,17 +127,12 @@ export function ProductEditor({
       </label>
 
       <div className="field-row">
-        <label className="field">
-          <span>发货方式</span>
-          <select
-            value={draft.shippingMethod}
-            onChange={(event) => update({ shippingMethod: event.target.value })}
-          >
-            <option value="包邮">包邮</option>
-            <option value="邮费另议">邮费另议</option>
-            <option value="无需邮寄">无需邮寄</option>
-          </select>
-        </label>
+        <CustomSelect
+          label="发货方式"
+          value={draft.shippingMethod}
+          options={SHIPPING_OPTIONS}
+          onChange={(shippingMethod) => update({ shippingMethod })}
+        />
         <label className="field">
           <span>分类备注</span>
           <input

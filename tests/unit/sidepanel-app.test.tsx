@@ -130,6 +130,23 @@ describe('App', () => {
     expect(submittedDraft).toMatchObject({ images: [], videos: [] });
   });
 
+  it('使用可键盘操作的非原生发货方式下拉框', async () => {
+    render(<App services={createServices()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '手动填写' }));
+    const combobox = screen.getByRole('combobox', { name: '发货方式' });
+    expect(combobox.tagName).toBe('BUTTON');
+
+    fireEvent.click(combobox);
+    expect(screen.getByRole('listbox', { name: '发货方式' })).toBeVisible();
+    expect(combobox).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.keyDown(combobox, { key: 'ArrowDown' });
+    fireEvent.keyDown(combobox, { key: 'Enter' });
+    expect(combobox).toHaveTextContent('邮费另议');
+    expect(screen.queryByRole('listbox', { name: '发货方式' })).toBeNull();
+  });
+
   it('一次上传多个视频并可分别删除', async () => {
     const deleted: string[] = [];
     render(
@@ -180,7 +197,7 @@ describe('App', () => {
     });
 
     expect(await screen.findByRole('button', { name: '上传中…' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '上传视频' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '上传视频' })).toBeEnabled();
 
     save.resolve({
       assetId: 'asset-demo',
@@ -192,6 +209,68 @@ describe('App', () => {
     });
 
     expect(await screen.findByRole('button', { name: '上传图片' })).toBeEnabled();
+  });
+
+  it('图片和视频并行上传时不会保留超出总量上限的媒体', async () => {
+    const storedAssetIds = new Set<string>();
+    const draftWithEightImages: ProductDraft = {
+      ...readyDraft,
+      id: 'eight-media-draft',
+      images: Array.from({ length: 8 }, (_, index) => ({
+        id: `remote-${String(index + 1)}`,
+        location: {
+          kind: 'remote' as const,
+          url: `https://img.example.com/${String(index + 1)}.jpg`,
+          extractedBy: 'dom' as const
+        },
+        loadStatus: 'loaded' as const
+      }))
+    };
+    render(
+      <App
+        services={createServices({
+          loadDraft: () => Promise.resolve(draftWithEightImages),
+          saveMedia: (file, kind) => {
+            const assetId = `asset-${file.name}`;
+            storedAssetIds.add(assetId);
+            return Promise.resolve({
+              assetId,
+              kind,
+              fileName: file.name,
+              mimeType: file.type,
+              byteLength: file.size,
+              createdAt: '2026-09-01T10:00:00.000Z'
+            });
+          },
+          deleteMedia: (assetId) => {
+            storedAssetIds.delete(assetId);
+            return Promise.resolve();
+          },
+          cleanupMedia: (referencedAssetIds) => {
+            const referenced = new Set(referencedAssetIds);
+            for (const assetId of storedAssetIds) {
+              if (!referenced.has(assetId)) {
+                storedAssetIds.delete(assetId);
+              }
+            }
+            return Promise.resolve();
+          }
+        })}
+      />
+    );
+
+    expect(await screen.findByText('媒体 8/9')).toBeVisible();
+    fireEvent.change(screen.getByLabelText('上传商品图片'), {
+      target: { files: [new File(['image'], 'parallel.png', { type: 'image/png' })] }
+    });
+    const videoInput = screen.getByLabelText('上传商品视频');
+    expect(videoInput).toBeEnabled();
+    fireEvent.change(videoInput, {
+      target: { files: [new File(['video'], 'parallel.mp4', { type: 'video/mp4' })] }
+    });
+
+    expect(await screen.findByText('媒体 9/9')).toBeVisible();
+    await waitFor(() => expect(storedAssetIds.size).toBe(1));
   });
 
   it('点击刷新时显示加载并立即采用最新登录状态', async () => {
@@ -317,6 +396,14 @@ describe('App', () => {
 
     expect(await screen.findByText('需要登录闲鱼')).toBeVisible();
     expect(screen.getByRole('button', { name: '填入闲鱼' })).toBeDisabled();
+  });
+
+  it('在商品链接输入处提醒先登录对应平台', () => {
+    render(<App services={createServices()} />);
+
+    const sourceInput = screen.getByLabelText('商品链接');
+    expect(screen.getByText('解析前请先登录对应平台')).toBeVisible();
+    expect(sourceInput).toHaveAccessibleDescription('解析前请先登录对应平台');
   });
 
   it('输入商品链接并解析后展示可编辑字段', async () => {

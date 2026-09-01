@@ -41,6 +41,12 @@ interface LocalImageThumbnailProps {
   onLoadStatus: (id: string, status: ImageLoadStatus) => void;
 }
 
+interface LocalVideoThumbnailProps {
+  assetId: string;
+  label: string;
+  resolveLocalAsset: (assetId: string) => Promise<StoredMediaAsset | null>;
+}
+
 function LocalImageThumbnail({
   assetId,
   imageId,
@@ -109,6 +115,70 @@ function LocalImageThumbnail({
       alt={label}
       onLoad={() => onLoadStatusRef.current(imageId, 'loaded')}
       onError={() => onLoadStatusRef.current(imageId, 'failed')}
+    />
+  );
+}
+
+function LocalVideoThumbnail({
+  assetId,
+  label,
+  resolveLocalAsset
+}: LocalVideoThumbnailProps) {
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  const resolveLocalAssetRef = useRef(resolveLocalAsset);
+
+  useEffect(() => {
+    resolveLocalAssetRef.current = resolveLocalAsset;
+  }, [resolveLocalAsset]);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+
+    void resolveLocalAssetRef
+      .current(assetId)
+      .then((asset) => {
+        if (!active) {
+          return;
+        }
+        if (asset?.kind !== 'video') {
+          setThumbnailFailed(true);
+          return;
+        }
+        objectUrl = URL.createObjectURL(asset.blob);
+        setThumbnailUrl(objectUrl);
+      })
+      .catch(() => {
+        if (active) {
+          setThumbnailFailed(true);
+        }
+      });
+
+    return () => {
+      active = false;
+      if (objectUrl !== null) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [assetId]);
+
+  if (thumbnailUrl === null) {
+    return (
+      <span className="video-tile__placeholder">
+        {thumbnailFailed ? '封面不可用' : '加载中'}
+      </span>
+    );
+  }
+
+  return (
+    <video
+      className="video-tile__media"
+      src={thumbnailUrl}
+      aria-label={`${label} 封面`}
+      muted
+      playsInline
+      preload="metadata"
     />
   );
 }
@@ -237,7 +307,6 @@ export function MediaPicker({
 
   const mediaCount = images.length + videos.length;
   const mediaLimitReached = mediaCount >= MAX_MEDIA_COUNT;
-  const mediaUploadInProgress = isUploadingImages || isUploadingVideos;
 
   return (
     <>
@@ -252,7 +321,7 @@ export function MediaPicker({
           type="file"
           accept="image/jpeg,image/png,image/webp"
           multiple
-          disabled={mediaLimitReached || mediaUploadInProgress}
+          disabled={mediaLimitReached || isUploadingImages}
           onChange={(event) => {
             const files = Array.from(event.currentTarget.files ?? []);
             onUploadImages(files);
@@ -263,7 +332,7 @@ export function MediaPicker({
           type="button"
           className="button button--quiet"
           aria-busy={isUploadingImages}
-          disabled={mediaLimitReached || mediaUploadInProgress}
+          disabled={mediaLimitReached || isUploadingImages}
           onClick={() => imageInput.current?.click()}
         >
           {isUploadingImages ? '上传中…' : '上传图片'}
@@ -356,7 +425,7 @@ export function MediaPicker({
             type="file"
             accept="video/mp4,video/quicktime,.mp4,.mov"
             multiple
-            disabled={mediaLimitReached || mediaUploadInProgress}
+            disabled={mediaLimitReached || isUploadingVideos}
             onChange={(event) => {
               const files = Array.from(event.currentTarget.files ?? []);
               onUploadVideos(files);
@@ -367,53 +436,56 @@ export function MediaPicker({
             type="button"
             className="button button--quiet"
             aria-busy={isUploadingVideos}
-            disabled={mediaLimitReached || mediaUploadInProgress}
+            disabled={mediaLimitReached || isUploadingVideos}
             onClick={() => videoInput.current?.click()}
           >
             {isUploadingVideos ? '上传中…' : '上传视频'}
           </button>
         </div>
       </div>
-      <div className="video-list" aria-label="商品视频">
+      <div className="video-grid" aria-label="商品视频">
         {videos.map((video, index) => {
           const videoNumber = index + 1;
           const label = `商品视频 ${String(videoNumber)}`;
           const previewLoading = loadingPreview === video.assetId;
           return (
-            <div className="video-card" key={video.id}>
-              <div>
-                <strong>{label}</strong>
-                <p>{`${video.fileName}（${formatByteLength(video.byteLength)}）`}</p>
-              </div>
-              <div className="media-tile-actions">
-                <button
-                  type="button"
-                  className="button button--quiet"
-                  disabled={previewLoading}
-                  onClick={(event) =>
-                    void openLocalPreview(
-                      video.assetId,
-                      'video',
-                      video.fileName,
-                      event.currentTarget
-                    )
-                  }
-                >
-                  预览{label}
-                </button>
-                <button
-                  type="button"
-                  className="video-card__remove"
-                  aria-label={`删除${label}`}
-                  title={`删除${label}`}
-                  onClick={() => {
-                    invalidatePreview();
-                    onRemoveVideo(video.id);
-                  }}
-                >
-                  删除
-                </button>
-              </div>
+            <div className="video-tile" key={video.id}>
+              <button
+                type="button"
+                className="video-tile__preview"
+                aria-label={`播放${label}`}
+                disabled={previewLoading}
+                onClick={(event) =>
+                  void openLocalPreview(video.assetId, 'video', label, event.currentTarget)
+                }
+              >
+                <LocalVideoThumbnail
+                  assetId={video.assetId}
+                  label={label}
+                  resolveLocalAsset={resolveLocalAsset}
+                />
+                <span className="video-tile__play" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" focusable="false">
+                    <path d="M8.25 5.6v12.8L18.5 12 8.25 5.6Z" />
+                  </svg>
+                </span>
+                <span className="video-tile__meta">
+                  <strong title={video.fileName}>{video.fileName}</strong>
+                  <span>{formatByteLength(video.byteLength)}</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                className="video-tile__remove"
+                aria-label={`删除${label}`}
+                title={`删除${label}`}
+                onClick={() => {
+                  invalidatePreview();
+                  onRemoveVideo(video.id);
+                }}
+              >
+                删除
+              </button>
             </div>
           );
         })}

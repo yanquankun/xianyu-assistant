@@ -36,7 +36,7 @@ afterEach(() => {
 });
 
 describe('MediaPicker', () => {
-  it('上传图片期间显示上传中并禁用两个媒体入口', () => {
+  it('上传图片期间只禁用图片入口', () => {
     render(
       <MediaPicker
         images={[]}
@@ -53,8 +53,30 @@ describe('MediaPicker', () => {
     );
 
     expect(screen.getByRole('button', { name: '上传中…' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '上传视频' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '上传视频' })).toBeEnabled();
     expect(screen.getByLabelText('上传商品图片')).toBeDisabled();
+    expect(screen.getByLabelText('上传商品视频')).toBeEnabled();
+  });
+
+  it('上传视频期间只禁用视频入口', () => {
+    render(
+      <MediaPicker
+        images={[]}
+        videos={[]}
+        isUploadingImages={false}
+        isUploadingVideos
+        resolveLocalAsset={() => Promise.resolve(null)}
+        onUploadImages={() => undefined}
+        onUploadVideos={() => undefined}
+        onRemoveImage={() => undefined}
+        onRemoveVideo={() => undefined}
+        onLoadStatus={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: '上传图片' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '上传中…' })).toBeDisabled();
+    expect(screen.getByLabelText('上传商品图片')).toBeEnabled();
     expect(screen.getByLabelText('上传商品视频')).toBeDisabled();
   });
 
@@ -484,6 +506,50 @@ describe('MediaPicker', () => {
     expect(revokeObjectURL).not.toHaveBeenCalled();
   });
 
+  it('将视频显示为带播放按钮的缩略图', async () => {
+    const createObjectURL = vi.fn(() => 'blob:video-thumbnail');
+    vi.stubGlobal('URL', { createObjectURL, revokeObjectURL: vi.fn() });
+    render(
+      <MediaPicker
+        images={[]}
+        videos={[
+          {
+            id: 'local-video',
+            assetId: 'asset-video',
+            fileName: 'demo.mp4',
+            mimeType: 'video/mp4',
+            byteLength: 5
+          }
+        ]}
+        resolveLocalAsset={() =>
+          Promise.resolve({
+            assetId: 'asset-video',
+            kind: 'video',
+            fileName: 'demo.mp4',
+            mimeType: 'video/mp4',
+            byteLength: 5,
+            createdAt: '2026-09-01T10:00:00.000Z',
+            blob: new Blob(['video'], { type: 'video/mp4' })
+          })
+        }
+        onUploadImages={() => undefined}
+        onUploadVideos={() => undefined}
+        onRemoveImage={() => undefined}
+        onRemoveVideo={() => undefined}
+        onLoadStatus={() => undefined}
+      />
+    );
+
+    expect(await screen.findByLabelText('商品视频 1 封面')).toHaveAttribute(
+      'src',
+      'blob:video-thumbnail'
+    );
+    const playButton = screen.getByRole('button', { name: '播放商品视频 1' });
+    expect(playButton).toBeVisible();
+    fireEvent.click(playButton);
+    expect(await screen.findByRole('dialog', { name: '媒体预览' })).toBeVisible();
+  });
+
   it('视频预览将原生 controls 纳入 Tab 焦点循环并恢复触发元素焦点', async () => {
     const createObjectURL = vi.fn(() => 'blob:video-preview');
     const revokeObjectURL = vi.fn();
@@ -519,9 +585,9 @@ describe('MediaPicker', () => {
       />
     );
 
-    const trigger = screen.getByRole('button', { name: '预览商品视频 1' });
+    const trigger = screen.getByRole('button', { name: '播放商品视频 1' });
     fireEvent.click(trigger);
-    const video = await screen.findByLabelText('demo.mp4');
+    const video = await screen.findByLabelText('商品视频 1');
     const closeButton = screen.getByRole('button', { name: '关闭媒体预览' });
     expect(closeButton).toHaveFocus();
 
