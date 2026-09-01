@@ -18,6 +18,36 @@ describe('extractAssignedJsonObject', () => {
     expect(extractAssignedJsonObject('window._itemOnlyExtra = ({"id":"1"})', 'window._itemOnly')).toBeNull();
   });
 
+  it('容忍对象和数组结尾的尾逗号，但不执行后续动态赋值', () => {
+    const script = `
+      window._itemInfo = ({
+        "stock":{"skuId":"100",},
+        "images":["a.jpg","b.jpg",],
+        "text":"字符串里的 ,} 不能被改写",
+        "priceFloor":{"price":"1881.00","afterDesc":{"text":"到手价",},},
+      });
+      window._itemInfo = {item: window._itemOnly.item};
+    `;
+
+    expect(extractAssignedJsonObject(script, 'window._itemInfo')).toEqual({
+      stock: { skuId: '100' },
+      images: ['a.jpg', 'b.jpg'],
+      text: '字符串里的 ,} 不能被改写',
+      priceFloor: { price: '1881.00', afterDesc: { text: '到手价' } }
+    });
+  });
+
+  it('同一脚本的首个赋值不是 JSON 时继续查找后续严格 JSON 赋值', () => {
+    const script = `
+      window._itemInfo = {item: window._itemOnly.item};
+      window._itemInfo = ({"stock":{"skuId":"100"}});
+    `;
+
+    expect(extractAssignedJsonObject(script, 'window._itemInfo')).toEqual({
+      stock: { skuId: '100' }
+    });
+  });
+
   it.each([
     'window._itemInfo = ({bad: 1})',
     'window._itemInfo = ({"stock":{"skuId":"100"})',

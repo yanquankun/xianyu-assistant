@@ -329,6 +329,48 @@ describe('parseProductDocument', () => {
     expect(JSON.stringify(result)).not.toContain('video-cover');
   });
 
+  it('兼容京东商品状态的尾逗号并忽略同一脚本中的动态覆盖赋值', async () => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html><script>
+        window._itemOnly = ({
+          "item":{"skuId":"100","skuName":"京东尾逗号商品","image":["jfs/a.jpg",],},
+        });
+        window._itemInfo = ({
+          "stock":{"skuId":"100","realSkuId":"100",},
+          "priceFloor":{
+            "price":"1881.00",
+            "afterDesc":{"text":"到手价",},
+            "ext":{"jdPrice":"2090.00","realPriceExt":{"ORIGINAL":{"salePrice":"2090.00",},},},
+          },
+        });
+        window._itemInfo = {item: window._itemOnly.item};
+      </script>
+      <ul id="loopImgUl"><li><img back_src="https://img10.360buyimg.com/n1/jfs/a.jpg" /></li></ul>`,
+      'text/html'
+    );
+    const context = {
+      platform: 'jd' as const,
+      pageUrl: 'https://item.m.jd.com/product/100.html',
+      productId: '100',
+      skuId: '100'
+    };
+
+    const evidence = await collectJdEvidence(document, context, {
+      loadPriceFont: () => Promise.reject(new Error('不应加载字体'))
+    });
+    const result = mergeProductEvidence(evidence, context);
+
+    expect(result).toMatchObject({
+      title: '京东尾逗号商品',
+      price: 1881,
+      originalPrice: 2090
+    });
+    expect(result.warnings).toEqual(['当前售价为到手价，请发布前核对适用条件']);
+    expect(result.images.map(getRemoteImageUrl)).toEqual([
+      'https://img10.360buyimg.com/n1/jfs/a.jpg'
+    ]);
+  });
+
   it('京东内嵌商品标识冲突时放弃所有平台专用字段', async () => {
     const document = new DOMParser().parseFromString(
       `<!doctype html><script>
