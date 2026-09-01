@@ -215,6 +215,80 @@ describe('field-level product evidence', () => {
 });
 
 describe('parseProductDocument', () => {
+  it('按最终域名使用独立天猫适配器', async () => {
+    const tmall = await parseFixture(
+      'tmall-product.html',
+      'https://detail.tmall.com/item.htm?id=200'
+    );
+
+    expect(tmall.platform).toBe('tmall');
+    expect(tmall.title).toBe('天猫当前商品');
+    expect(tmall.price).toBe(188);
+    expect(tmall.originalPrice).toBe(209);
+    expect(tmall.warnings).toContain('当前售价为会员价，请发布前核对适用条件');
+    expect(tmall.images.map(getRemoteImageUrl)).toEqual([
+      'https://img.alicdn.com/imgextra/tmall-a.jpg',
+      'https://img.alicdn.com/imgextra/tmall-b.jpg'
+    ]);
+  });
+
+  it('淘宝只读取显式商品标题标记，不使用无关 h1', async () => {
+    const document = new DOMParser().parseFromString(
+      '<!doctype html><h1>店铺活动标题</h1><div data-title="product-title">淘宝当前商品</div>',
+      'text/html'
+    );
+    const result = await parseProductDocument(
+      document,
+      'https://item.taobao.com/item.htm?id=100'
+    );
+
+    expect(result.title).toBe('淘宝当前商品');
+  });
+
+  it('淘宝售价只取当前商品价格区并保留条件标签和显式原价', async () => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html>
+      <div data-title="product-title">淘宝当前商品</div>
+      <section data-price-region="product">
+        <span>到手价</span><span data-sale-price>¥88.00</span><s data-original-price>¥109.00</s>
+      </section>
+      <aside data-recommendation><span>推荐商品 ¥1.00</span></aside>`,
+      'text/html'
+    );
+    const result = await parseProductDocument(
+      document,
+      'https://item.taobao.com/item.htm?id=100'
+    );
+
+    expect(result.price).toBe(88);
+    expect(result.originalPrice).toBe(109);
+    expect(result.warnings).toContain('当前售价为到手价，请发布前核对适用条件');
+  });
+
+  it('淘宝图库只采集作用域内的懒加载商品图并排除视频和推荐图', async () => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html>
+      <div data-title="product-title">淘宝当前商品</div>
+      <div data-product-gallery="taobao">
+        <img data-src="https://img.alicdn.com/imgextra/a.jpg" />
+        <img data-lazy-src="https://img.alicdn.com/imgextra/b.jpg" />
+        <div data-video><img src="https://img.alicdn.com/video-cover.jpg" /></div>
+      </div>
+      <div data-recommendation><img src="https://img.alicdn.com/recommendation.jpg" /></div>`,
+      'text/html'
+    );
+    const result = await parseProductDocument(
+      document,
+      'https://item.taobao.com/item.htm?id=100'
+    );
+
+    expect(result.images.map(getRemoteImageUrl)).toEqual([
+      'https://img.alicdn.com/imgextra/a.jpg',
+      'https://img.alicdn.com/imgextra/b.jpg'
+    ]);
+    expect(JSON.stringify(result.images)).not.toMatch(/video-cover|recommendation/u);
+  });
+
   it('从京东移动页内嵌状态解析当前商品、动态价格和有序图库', async () => {
     const html = readFileSync(
       resolve(process.cwd(), 'tests', 'fixtures', 'jd-mobile-product.html'),

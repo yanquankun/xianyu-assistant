@@ -12,6 +12,7 @@ import { collectJdEvidence } from './jd';
 import { createOpenTypeGlyphResolver } from './jd-price-font';
 import { mergeProductEvidence } from './merge';
 import { collectTaobaoEvidence } from './taobao';
+import { collectTmallEvidence } from './tmall';
 
 const PAGE_ERROR_PATTERNS = [
   { pattern: /页面不存在/u, code: 'PAGE_ERROR' },
@@ -124,13 +125,15 @@ export async function parseProductDocument(
   };
   const generic = collectGenericEvidence(document, context);
   const platformEvidence =
-    normalized.platform === 'taobao' || normalized.platform === 'tmall'
+    context.platform === 'taobao'
       ? collectTaobaoEvidence(document, context)
-      : normalized.platform === 'jd'
-        ? await collectJdEvidence(document, context, {
-            loadPriceFont: (fontUrl) => createOpenTypeGlyphResolver(fontUrl, dependencies.fetch)
-          })
-        : createEvidenceSet();
+      : context.platform === 'tmall'
+        ? collectTmallEvidence(document, context)
+        : context.platform === 'jd'
+          ? await collectJdEvidence(document, context, {
+              loadPriceFont: (fontUrl) => createOpenTypeGlyphResolver(fontUrl, dependencies.fetch)
+            })
+          : createEvidenceSet();
   return mergeProductEvidence(mergeEvidenceSets(generic, platformEvidence), context);
 }
 
