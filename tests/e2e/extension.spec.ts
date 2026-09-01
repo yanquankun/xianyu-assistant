@@ -53,7 +53,10 @@ function titlelessProductHtml(canonicalUrl: string, imageBaseUrl: string): strin
     <meta property="product:price:amount" content="88.00" />
     <meta property="product:price:currency" content="CNY" />
   </head>
-  <body><main>本地商品夹具</main></body>
+  <body>
+    <main>本地商品夹具</main>
+    <div data-price-region="product"><span data-sale-price>88.00</span></div>
+  </body>
 </html>`;
 }
 
@@ -88,9 +91,9 @@ test.describe('闲鱼上架助手扩展', () => {
     });
     await context.route('https://item.taobao.com/**', async (route) => {
       const url = route.request().url();
-      const html = url.includes('short-fixture')
+      const html = new URL(url).searchParams.get('id') === '200'
         ? titlelessProductHtml(
-            'https://item.taobao.com/item.htm?id=short-fixture',
+            'https://item.taobao.com/item.htm?id=200',
             fixtureServer.baseUrl
           )
         : taobaoHtml.replaceAll('https://img.example.com', fixtureServer.baseUrl);
@@ -98,7 +101,7 @@ test.describe('闲鱼上架助手扩展', () => {
     });
     await context.route('https://item.jd.com/**', async (route) => {
       const pathname = new URL(route.request().url()).pathname;
-      if (pathname === '/product/error-fixture.html') {
+      if (pathname === '/400.html') {
         await route.fulfill({
           status: 400,
           contentType: 'text/html; charset=utf-8',
@@ -108,34 +111,6 @@ test.describe('闲鱼上架助手扩展', () => {
       }
       const html = jdHtml.replaceAll('//img.example.com', fixtureServer.baseUrl);
       await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html });
-    });
-    await context.route('https://3.cn/**', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'text/html; charset=utf-8',
-        body: '<!doctype html><title>京东短链本地夹具</title><main>第一跳</main>'
-      });
-    });
-    await context.route('https://u.jd.com/**', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'text/html; charset=utf-8',
-        body: '<!doctype html><title>京东短链本地夹具</title><main>第二跳</main>'
-      });
-    });
-    await context.route('https://e.tb.cn/**', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'text/html; charset=utf-8',
-        body: '<!doctype html><title>淘宝短链本地夹具</title><main>第一跳</main>'
-      });
-    });
-    await context.route('https://m.taobao.com/**', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'text/html; charset=utf-8',
-        body: '<!doctype html><title>淘宝短链本地夹具</title><main>第二跳</main>'
-      });
     });
     await context.route('https://www.goofish.com/**', async (route) => {
       const isLogin = new URL(route.request().url()).pathname.startsWith('/login');
@@ -280,7 +255,7 @@ test.describe('闲鱼上架助手扩展', () => {
     expect(publishClicks).toBe(0);
   });
 
-  test('京东与淘宝分享文案只走本地短链夹具，并拒绝错误页', async ({ browserName }) => {
+  test('京东与淘宝完整分享文案使用匿名夹具，并拒绝错误页', async ({ browserName }) => {
     test.setTimeout(60_000);
     expect(browserName).toBe('chromium');
     if (context === undefined) {
@@ -288,32 +263,30 @@ test.describe('闲鱼上架助手扩展', () => {
     }
     const panel = await openSidePanelPage(context);
 
-    const jdShortPage = await context.newPage();
-    await jdShortPage.goto('https://3.cn/product');
+    const jdPage = await context.newPage();
+    await jdPage.goto('https://item.jd.com/100.html');
     await panel
       .getByLabel('商品链接')
-      .fill('京东分享「京东客户端商品」 https://3.cn/product CA1507');
+      .fill('京东分享「京东客户端商品」 https://item.jd.com/100.html CA1507');
     await panel.getByRole('button', { name: '解析商品' }).click();
-    await jdShortPage.goto('https://u.jd.com/product-fixture');
-    await jdShortPage.goto('https://item.jd.com/product/short-fixture.html');
     await expect(panel.getByLabel('商品标题')).toHaveValue('京东结构化商品', {
       timeout: 15_000
     });
     await expect
       .poll(() => readStoredDraft(panel))
       .toMatchObject({
-        submittedUrl: 'https://3.cn/product',
-        canonicalUrl: 'https://item.jd.com/product/short-fixture.html'
+        submittedUrl: 'https://item.jd.com/100.html',
+        canonicalUrl: 'https://item.jd.com/100.html'
       });
 
     await panel.getByRole('button', { name: '返回选择方式' }).click();
     await panel.getByRole('button', { name: '确认返回' }).click();
-    const taobaoShortPage = await context.newPage();
-    await taobaoShortPage.goto('https://e.tb.cn/short');
-    await panel.getByLabel('商品链接').fill('淘宝分享「淘宝分享标题」 https://e.tb.cn/short CZ009');
+    const taobaoPage = await context.newPage();
+    await taobaoPage.goto('https://item.taobao.com/item.htm?id=200');
+    await panel
+      .getByLabel('商品链接')
+      .fill('淘宝分享「淘宝分享标题」 https://item.taobao.com/item.htm?id=200 CZ009');
     await panel.getByRole('button', { name: '解析商品' }).click();
-    await taobaoShortPage.goto('https://m.taobao.com/h.short-fixture');
-    await taobaoShortPage.goto('https://item.taobao.com/item.htm?id=short-fixture');
     await expect(panel.getByLabel('商品标题')).toHaveValue('淘宝分享标题', {
       timeout: 15_000
     });
@@ -321,18 +294,18 @@ test.describe('闲鱼上架助手扩展', () => {
     await expect
       .poll(() => readStoredDraft(panel))
       .toMatchObject({
-        submittedUrl: 'https://e.tb.cn/short',
-        canonicalUrl: 'https://item.taobao.com/item.htm?id=short-fixture'
+        submittedUrl: 'https://item.taobao.com/item.htm?id=200',
+        canonicalUrl: 'https://item.taobao.com/item.htm?id=200'
       });
 
     await panel.getByRole('button', { name: '返回选择方式' }).click();
     await panel.getByRole('button', { name: '确认返回' }).click();
-    const errorShortPage = await context.newPage();
-    await errorShortPage.goto('https://3.cn/error');
-    await panel.getByLabel('商品链接').fill('京东错误页「不能使用的标题」 https://3.cn/error');
+    const errorPage = await context.newPage();
+    await errorPage.goto('https://item.jd.com/400.html');
+    await panel
+      .getByLabel('商品链接')
+      .fill('京东错误页「不能使用的标题」 https://item.jd.com/400.html');
     await panel.getByRole('button', { name: '解析商品' }).click();
-    await errorShortPage.goto('https://u.jd.com/error-fixture');
-    await errorShortPage.goto('https://item.jd.com/product/error-fixture.html');
     await expect(panel.getByText('商品页面返回 HTTP 400 错误')).toBeVisible();
     await expect(panel.getByLabel('商品标题')).toHaveCount(0);
     await expect(panel.getByRole('button', { name: '手动填写' })).toBeVisible();
