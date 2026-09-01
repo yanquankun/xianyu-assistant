@@ -1,3 +1,5 @@
+import { sanitizeProductLogUrl } from '../domain/product-url';
+
 export type OperationStage = 'parse' | 'permission' | 'ai' | 'login' | 'fill' | 'system';
 
 export type OperationOutcome = 'success' | 'failure' | 'warning';
@@ -119,27 +121,11 @@ function sanitizeLogId(value: string): string {
   return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(value) ? value : INVALID_LOG_ID_PLACEHOLDER;
 }
 
-function sanitizeHttpUrl(value: string): string | undefined {
-  if (containsUnsafeContent(value)) {
-    return undefined;
-  }
-  try {
-    const url = new URL(value);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      return undefined;
-    }
-    url.username = '';
-    url.password = '';
-    return sanitizeText(url.href, 4_096);
-  } catch {
-    return undefined;
-  }
-}
-
 function sanitizeDraftSnapshot(draft: OperationDraftSnapshot): OperationDraftSnapshot | undefined {
-  const sourceUrl = draft.sourceUrl === undefined ? undefined : sanitizeHttpUrl(draft.sourceUrl);
+  const sourceUrl =
+    draft.sourceUrl === undefined ? undefined : sanitizeProductLogUrl(draft.sourceUrl);
   const canonicalUrl =
-    draft.canonicalUrl === undefined ? undefined : sanitizeHttpUrl(draft.canonicalUrl);
+    draft.canonicalUrl === undefined ? undefined : sanitizeProductLogUrl(draft.canonicalUrl);
   const title =
     draft.title === undefined ? undefined : sanitizeText(draft.title, MAX_LOG_TITLE_LENGTH);
   const description =

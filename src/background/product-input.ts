@@ -10,17 +10,6 @@ export interface ParsedProductInput {
 const HTTP_URL_PATTERN = /https?:\/\/[^\s<>"'()[\]「」]+/iu;
 const TRAILING_URL_PUNCTUATION = /[，。；、,.;！？!?：:]+$/u;
 
-function platformFromHost(hostname: string, fallback: ProductPlatform): ProductPlatform {
-  const host = hostname.toLowerCase();
-  if (host === '3.cn') {
-    return 'jd';
-  }
-  if (host === 'e.tb.cn') {
-    return 'taobao';
-  }
-  return fallback;
-}
-
 function firstHintedTitle(input: string): string | undefined {
   for (const match of input.matchAll(/「([^」]*)」/gu)) {
     const title = match[1]?.trim();
@@ -41,7 +30,7 @@ export function parseProductInput(input: string): ParsedProductInput {
   const hintedTitle = firstHintedTitle(input);
   return {
     submittedUrl: normalized.href,
-    platformHint: platformFromHost(normalized.url.hostname, normalized.platform),
+    platformHint: normalized.platform,
     ...(hintedTitle === undefined ? {} : { hintedTitle })
   };
 }

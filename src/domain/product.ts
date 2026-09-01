@@ -1,4 +1,4 @@
-export type ProductPlatform = 'taobao' | 'jd' | 'generic';
+export type ProductPlatform = 'taobao' | 'tmall' | 'jd' | 'generic';
 
 export type ExtractionConfidence = 'high' | 'medium' | 'low';
 

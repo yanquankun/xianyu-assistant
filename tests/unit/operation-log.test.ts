@@ -79,6 +79,29 @@ describe('sanitizeLogEntry', () => {
     expect(sanitized.details?.draft?.canonicalUrl).toBe('https://example.com/final');
   });
 
+  it('商品链接快照只保留规范商品身份且移除短链分享参数', () => {
+    const sanitized = sanitizeLogEntry({
+      id: 'log-product-url',
+      timestamp: '2026-08-31T10:00:00.000Z',
+      stage: 'parse',
+      outcome: 'success',
+      message: '解析完成',
+      details: {
+        draft: {
+          sourceUrl: 'https://user:pass@3.cn/short?jkl=@code@#share',
+          canonicalUrl:
+            'https://detail.tmall.com/item.htm?id=1&skuId=2&spm=a1&utm_source=share#detail'
+        }
+      }
+    });
+
+    expect(sanitized.details?.draft).toEqual({
+      sourceUrl: 'https://3.cn/short',
+      canonicalUrl: 'https://detail.tmall.com/item.htm?id=1&skuId=2'
+    });
+    expect(JSON.stringify(sanitized)).not.toMatch(/user:pass|@code@|spm=|utm_source|#share/u);
+  });
+
   it('旧日志缺少规范 URL 时继续兼容', () => {
     const entry = parseOperationLogEntry({
       id: 'old-dual-url-log',

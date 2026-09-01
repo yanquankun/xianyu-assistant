@@ -22,6 +22,7 @@ interface ProductEditorProps {
 
 const PLATFORM_LABELS: Record<ProductDraft['platform'], string> = {
   taobao: '淘宝来源',
+  tmall: '天猫来源',
   jd: '京东来源',
   generic: '其他来源'
 };

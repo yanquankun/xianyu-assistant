@@ -109,6 +109,13 @@ describe('parseRuntimeMessage', () => {
     );
     expect(isProductDraft({ ...draft, submittedUrl: '分享文案原文' })).toBe(false);
     expect(
+      isProductDraft({
+        ...draft,
+        platform: 'tmall',
+        canonicalUrl: 'https://detail.tmall.com/item.htm?id=1'
+      })
+    ).toBe(true);
+    expect(
       parseParsedProduct({
         platform: 'taobao',
         submittedUrl: 'https://e.tb.cn/h.test',
@@ -192,6 +199,31 @@ describe('parseRuntimeMessage', () => {
 });
 
 describe('parseStoredProductDraft', () => {
+  it('把规范链接明确指向天猫的旧淘宝草稿迁移为天猫', () => {
+    expect(
+      parseStoredProductDraft({
+        ...draft,
+        platform: 'taobao',
+        canonicalUrl: 'https://detail.tmall.com/item.htm?id=1'
+      })
+    ).toMatchObject({
+      migrated: true,
+      draft: { platform: 'tmall' }
+    });
+  });
+
+  it.each(['', 'not-a-url', 'https://item.taobao.com/item.htm?id=1'])(
+    '旧淘宝草稿的规范链接为 %s 时保持原平台',
+    (canonicalUrl) => {
+      expect(
+        parseStoredProductDraft({ ...draft, platform: 'taobao', canonicalUrl })
+      ).toMatchObject({
+        migrated: false,
+        draft: { platform: 'taobao' }
+      });
+    }
+  );
+
   it('迁移旧选中态和单视频时只保留会提交的媒体并遵守九个上限', () => {
     const result = parseStoredProductDraft({
       ...draft,

@@ -88,7 +88,7 @@ describe('operation log factory', () => {
     );
 
     expect(entry.details?.draft).toMatchObject({
-      sourceUrl: 'https://3.cn/short?jkl=@code@',
+      sourceUrl: 'https://3.cn/short',
       canonicalUrl: 'https://item.jd.com/product/1.html'
     });
     expect(JSON.stringify(entry)).not.toContain('分享标题');

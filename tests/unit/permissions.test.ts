@@ -31,7 +31,7 @@ describe('normalizeHttpUrl', () => {
 
   it.each([
     ['https://item.taobao.com/item.htm?id=1', 'taobao'],
-    ['https://detail.tmall.com/item.htm?id=1', 'taobao'],
+    ['https://detail.tmall.com/item.htm?id=1', 'tmall'],
     ['https://item.jd.com/1.html', 'jd'],
     ['https://shop.example.com/item/1', 'generic']
   ] as const)('识别 %s 的平台为 %s', (value, platform) => {
@@ -105,6 +105,12 @@ describe('ensureProductDestination', () => {
       ensureProductDestination(
         normalizeHttpUrl('https://e.tb.cn/h.test'),
         'https://detail.tmall.com/item.htm?id=1'
+      )
+    ).not.toThrow();
+    expect(() =>
+      ensureProductDestination(
+        normalizeHttpUrl('https://e.tb.cn/h.test'),
+        'https://item.taobao.com/item.htm?id=1'
       )
     ).not.toThrow();
     expect(() =>

@@ -28,10 +28,11 @@ describe('parseProductInput', () => {
   it.each([
     ['https://item.jd.com/100.html', 'jd'],
     ['https://item.taobao.com/item.htm?id=1。', 'taobao'],
+    ['https://detail.tmall.com/item.htm?id=2；', 'tmall'],
     ['https://shop.example.com/product/1;', 'generic']
   ] as const)('接受纯 URL %s', (input, platformHint) => {
     expect(parseProductInput(input)).toEqual({
-      submittedUrl: input.replace(/[。;]$/u, ''),
+      submittedUrl: input.replace(/[。；;]$/u, ''),
       platformHint
     });
   });

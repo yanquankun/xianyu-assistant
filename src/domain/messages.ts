@@ -10,6 +10,13 @@ import type {
   StoredDraftParseResult
 } from './product';
 import { MAX_MEDIA_COUNT } from '../media/validation';
+import { classifyProductHost } from './product-url';
+
+const PRODUCT_PLATFORMS = ['taobao', 'tmall', 'jd', 'generic'] as const;
+
+function isProductPlatform(value: unknown): value is ProductDraft['platform'] {
+  return PRODUCT_PLATFORMS.some((platform) => platform === value);
+}
 
 export type RuntimeMessage =
   | {
@@ -153,8 +160,7 @@ export function isProductDraft(value: unknown): value is ProductDraft {
   return (
     isRecord(value) &&
     isText(value.id, 200, false) &&
-    typeof value.platform === 'string' &&
-    ['taobao', 'jd', 'generic'].includes(value.platform) &&
+    isProductPlatform(value.platform) &&
     (value.submittedUrl === undefined || isHttpUrl(value.submittedUrl)) &&
     isText(value.canonicalUrl, 4_096) &&
     isSourceFacts(value.source) &&
@@ -207,9 +213,23 @@ function migrateStoredImage(value: unknown): ProductImage | null {
   };
 }
 
+function migrateStoredPlatform(draft: ProductDraft): StoredDraftParseResult {
+  if (draft.platform !== 'taobao') {
+    return { draft, migrated: false };
+  }
+  try {
+    if (classifyProductHost(new URL(draft.canonicalUrl).hostname).platformHint === 'tmall') {
+      return { draft: { ...draft, platform: 'tmall' }, migrated: true };
+    }
+  } catch {
+    // Empty and legacy malformed canonical URLs remain unchanged.
+  }
+  return { draft, migrated: false };
+}
+
 export function parseStoredProductDraft(value: unknown): StoredDraftParseResult | null {
   if (isProductDraft(value)) {
-    return { draft: value, migrated: false };
+    return migrateStoredPlatform(value);
   }
   if (!isRecord(value) || !Array.isArray(value.images)) {
     return null;
@@ -256,13 +276,16 @@ export function parseStoredProductDraft(value: unknown): StoredDraftParseResult 
   if (!isProductDraft(candidate)) {
     return null;
   }
-  return { draft: candidate, migrated: migrated || removedImage };
+  const platformResult = migrateStoredPlatform(candidate);
+  return {
+    draft: platformResult.draft,
+    migrated: migrated || removedImage || platformResult.migrated
+  };
 }
 
 export function parseParsedProduct(value: unknown): ParsedProduct | null {
   return isRecord(value) &&
-    typeof value.platform === 'string' &&
-    ['taobao', 'jd', 'generic'].includes(value.platform) &&
+    isProductPlatform(value.platform) &&
     (value.submittedUrl === undefined || isHttpUrl(value.submittedUrl)) &&
     isText(value.canonicalUrl, 4_096) &&
     isText(value.title, 500) &&

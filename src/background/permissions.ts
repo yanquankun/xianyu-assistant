@@ -1,31 +1,12 @@
 import type { ProductPlatform } from '../domain/product';
+import { classifyProductHost, type ProductDomainFamily } from '../domain/product-url';
 
 export interface NormalizedUrl {
   url: URL;
   href: string;
   platform: ProductPlatform;
-}
-
-function classifyPlatform(hostname: string): ProductPlatform {
-  const host = hostname.toLowerCase();
-  if (host === 'e.tb.cn') {
-    return 'taobao';
-  }
-  if (
-    host === 'taobao.com' ||
-    host.endsWith('.taobao.com') ||
-    host === 'tmall.com' ||
-    host.endsWith('.tmall.com')
-  ) {
-    return 'taobao';
-  }
-  if (host === 'jd.com' || host.endsWith('.jd.com')) {
-    return 'jd';
-  }
-  if (host === '3.cn') {
-    return 'jd';
-  }
-  return 'generic';
+  domainFamily: ProductDomainFamily;
+  isShortLink: boolean;
 }
 
 export function normalizeHttpUrl(input: string): NormalizedUrl {
@@ -49,10 +30,13 @@ export function normalizeHttpUrl(input: string): NormalizedUrl {
   url.password = '';
   url.hash = '';
 
+  const classification = classifyProductHost(url.hostname);
   return {
     url,
     href: url.href,
-    platform: classifyPlatform(url.hostname)
+    platform: classification.platformHint,
+    domainFamily: classification.domainFamily,
+    isShortLink: classification.isShortLink
   };
 }
 
@@ -81,28 +65,9 @@ export function getProductPermissionOrigins(url: URL): string[] {
   return [getRequestedOrigin(url)];
 }
 
-function isPlatformHost(hostname: string, platform: ProductPlatform): boolean {
-  const host = hostname.toLowerCase();
-  if (platform === 'jd') {
-    return host === 'jd.com' || host.endsWith('.jd.com');
-  }
-  if (platform === 'taobao') {
-    return (
-      host === 'taobao.com' ||
-      host.endsWith('.taobao.com') ||
-      host === 'tmall.com' ||
-      host.endsWith('.tmall.com')
-    );
-  }
-  return true;
-}
-
 export function ensureProductDestination(source: NormalizedUrl, destination: string): void {
   const finalUrl = normalizeHttpUrl(destination);
-  if (
-    source.platform !== 'generic' &&
-    !isPlatformHost(finalUrl.url.hostname, source.platform)
-  ) {
+  if (source.domainFamily !== 'generic' && finalUrl.domainFamily !== source.domainFamily) {
     throw new Error('商品页跳转到了不受支持的站点，请先在浏览器中打开商品页');
   }
   const hostname = finalUrl.url.hostname.toLowerCase();

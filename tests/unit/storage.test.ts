@@ -113,6 +113,19 @@ describe('createLocalStore', () => {
     });
   });
 
+  it('读取旧天猫草稿时修正平台并持久化迁移结果', async () => {
+    const area = new MemoryStorageArea();
+    area.data.productDraft = {
+      ...draft,
+      platform: 'taobao',
+      canonicalUrl: 'https://detail.tmall.com/item.htm?id=1'
+    };
+    const store = createLocalStore(area);
+
+    await expect(store.getDraft()).resolves.toMatchObject({ platform: 'tmall' });
+    expect(area.data.productDraft).toMatchObject({ platform: 'tmall' });
+  });
+
   it('存储中没有值时返回安全默认值', async () => {
     const store = createLocalStore(new MemoryStorageArea());
 
