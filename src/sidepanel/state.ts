@@ -74,7 +74,7 @@ export const initialWorkflowState: WorkflowState = {
   draft: null,
   expansionTarget: null,
   loginState: 'unknown',
-  statusMessage: '粘贴淘宝或京东商品链接开始整理',
+  statusMessage: '粘贴淘宝、天猫或京东商品链接开始整理',
   errorMessage: null
 };
 
@@ -420,7 +420,7 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
         sourceUrl: '',
         draft: null,
         expansionTarget: null,
-        statusMessage: '粘贴淘宝或京东商品链接开始整理',
+        statusMessage: '粘贴淘宝、天猫或京东商品链接开始整理',
         errorMessage: null
       };
     case 'OPERATION_FAILED':

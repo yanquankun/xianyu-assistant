@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "将淘宝、京东商品整理为闲鱼发布草稿的 Chrome 侧边栏扩展",
+  "description": "将淘宝、天猫和京东商品整理为闲鱼发布草稿的 Chrome 侧边栏扩展",
   "engines": {
     "node": ">=22.0.0"
   },

@@ -98,6 +98,30 @@ function createServices(overrides: Partial<SidePanelServices> = {}): SidePanelSe
 }
 
 describe('App', () => {
+  it('在商品入口明确显示淘宝、天猫和京东', () => {
+    render(<App services={createServices()} />);
+
+    expect(screen.getByText('淘宝、天猫与京东')).toBeVisible();
+    expect(screen.getByPlaceholderText('粘贴淘宝、天猫或京东商品链接')).toBeVisible();
+  });
+
+  it('天猫草稿显示独立的平台来源', async () => {
+    render(
+      <App
+        services={createServices({
+          loadDraft: () =>
+            Promise.resolve({
+              ...readyDraft,
+              platform: 'tmall',
+              canonicalUrl: 'https://detail.tmall.com/item.htm?id=1'
+            })
+        })}
+      />
+    );
+
+    expect(await screen.findByText('天猫来源')).toBeVisible();
+  });
+
   it('无图片和视频的完整草稿也允许填入闲鱼', async () => {
     let submittedDraft: ProductDraft | null = null;
     render(

@@ -44,6 +44,10 @@ const draft: ProductDraft = {
 };
 
 describe('reduceWorkflow', () => {
+  it('初始状态提示支持淘宝、天猫和京东', () => {
+    expect(initialWorkflowState.statusMessage).toBe('粘贴淘宝、天猫或京东商品链接开始整理');
+  });
+
   it('图片和视频共享九个媒体名额', () => {
     const images = Array.from({ length: 8 }, (_, index) => ({
       id: `image-${String(index + 1)}`,
@@ -157,7 +161,7 @@ describe('reduceWorkflow', () => {
       expansionTarget: null,
       loginState: 'logged-in',
       errorMessage: null,
-      statusMessage: '粘贴淘宝或京东商品链接开始整理'
+      statusMessage: '粘贴淘宝、天猫或京东商品链接开始整理'
     });
     expect(
       reduceWorkflow(reset, {

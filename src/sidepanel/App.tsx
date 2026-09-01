@@ -733,7 +733,7 @@ export function App({ services }: { services: SidePanelServices }) {
               <section className="source-card">
                 <div className="section-heading">
                   <div>
-                    <span className="eyebrow">淘宝与京东</span>
+                    <span className="eyebrow">淘宝、天猫与京东</span>
                     <h1>从商品链接开始</h1>
                   </div>
                   <span className="step-number">01</span>
@@ -752,7 +752,7 @@ export function App({ services }: { services: SidePanelServices }) {
                       type="url"
                       aria-describedby="source-login-reminder"
                       value={state.sourceUrl}
-                      placeholder="粘贴淘宝或京东商品链接"
+                      placeholder="粘贴淘宝、天猫或京东商品链接"
                       onChange={(event) =>
                         dispatch({ type: 'SOURCE_URL_CHANGED', url: event.target.value })
                       }

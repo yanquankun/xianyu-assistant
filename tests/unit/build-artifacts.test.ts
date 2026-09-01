@@ -27,7 +27,12 @@ describe('Chrome 构建产物', () => {
     expect(readFileSync(zipPath).subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
     expect(existsSync(crxPath)).toBe(true);
     expect(readFileSync(crxPath).subarray(0, 4)).toEqual(Buffer.from('Cr24', 'ascii'));
-    expect(existsSync(resolve(outputUnpackedDirectory, 'manifest.json'))).toBe(true);
+    const manifestPath = resolve(outputUnpackedDirectory, 'manifest.json');
+    expect(existsSync(manifestPath)).toBe(true);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { description?: unknown };
+    expect(manifest.description).toBe(
+      '解析淘宝、天猫和京东商品，生成可编辑文案并填入闲鱼发布页。'
+    );
     expect(existsSync(resolve(distDirectory, 'xianyu-assistant-unpacked'))).toBe(false);
   }, 60_000);
 
