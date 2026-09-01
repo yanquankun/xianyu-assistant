@@ -102,6 +102,42 @@ describe('sanitizeLogEntry', () => {
     expect(JSON.stringify(sanitized)).not.toMatch(/user:pass|@code@|spm=|utm_source|#share/u);
   });
 
+  it('来源摘要规范化商品链接并把图片数量限制为九张', () => {
+    const sanitized = sanitizeLogEntry({
+      id: 'source-summary',
+      timestamp: '2026-09-01T10:00:00.000Z',
+      stage: 'parse',
+      outcome: 'success',
+      message: '商品解析完成',
+      details: {
+        source: {
+          platform: 'tmall',
+          canonicalUrl:
+            'https://detail.tmall.com/item.htm?id=200&skuId=300&spm=a1&utm_source=share#detail',
+          fields: {
+            title: true,
+            description: false,
+            price: true,
+            originalPrice: false,
+            imageCount: 99
+          }
+        }
+      }
+    });
+
+    expect(sanitized.details?.source).toEqual({
+      platform: 'tmall',
+      canonicalUrl: 'https://detail.tmall.com/item.htm?id=200&skuId=300',
+      fields: {
+        title: true,
+        description: false,
+        price: true,
+        originalPrice: false,
+        imageCount: 9
+      }
+    });
+  });
+
   it('旧日志缺少规范 URL 时继续兼容', () => {
     const entry = parseOperationLogEntry({
       id: 'old-dual-url-log',

@@ -1,4 +1,5 @@
 import { sanitizeProductLogUrl } from '../domain/product-url';
+import type { ProductPlatform } from '../domain/product';
 
 export type OperationStage = 'parse' | 'permission' | 'ai' | 'login' | 'fill' | 'system';
 
@@ -17,8 +18,21 @@ export interface OperationDraftSnapshot {
   videoName?: string;
 }
 
+export interface OperationSourceSummary {
+  platform: ProductPlatform;
+  canonicalUrl: string;
+  fields: {
+    title: boolean;
+    description: boolean;
+    price: boolean;
+    originalPrice: boolean;
+    imageCount: number;
+  };
+}
+
 export interface OperationLogDetails {
   draft?: OperationDraftSnapshot;
+  source?: OperationSourceSummary;
   warnings?: string[];
   result?: string;
   error?: string;
@@ -168,6 +182,40 @@ function sanitizeDraftSnapshot(draft: OperationDraftSnapshot): OperationDraftSna
   return Object.keys(sanitized).length === 0 ? undefined : sanitized;
 }
 
+function isProductPlatform(value: unknown): value is ProductPlatform {
+  return (
+    value === 'taobao' || value === 'tmall' || value === 'jd' || value === 'generic'
+  );
+}
+
+function sanitizeSourceSummary(
+  source: OperationSourceSummary
+): OperationSourceSummary | undefined {
+  const canonicalUrl = sanitizeProductLogUrl(source.canonicalUrl);
+  if (
+    !isProductPlatform(source.platform) ||
+    canonicalUrl === undefined ||
+    typeof source.fields.title !== 'boolean' ||
+    typeof source.fields.description !== 'boolean' ||
+    typeof source.fields.price !== 'boolean' ||
+    typeof source.fields.originalPrice !== 'boolean' ||
+    !Number.isInteger(source.fields.imageCount)
+  ) {
+    return undefined;
+  }
+  return {
+    platform: source.platform,
+    canonicalUrl,
+    fields: {
+      title: source.fields.title,
+      description: source.fields.description,
+      price: source.fields.price,
+      originalPrice: source.fields.originalPrice,
+      imageCount: Math.min(MAX_LOG_SELECTED_IMAGES, Math.max(0, source.fields.imageCount))
+    }
+  };
+}
+
 function sanitizeWarnings(warnings: readonly string[]): string[] | undefined {
   const sanitized = warnings
     .slice(0, MAX_LOG_WARNINGS)
@@ -178,16 +226,46 @@ function sanitizeWarnings(warnings: readonly string[]): string[] | undefined {
 
 function sanitizeDetails(details: OperationLogDetails): OperationLogDetails | undefined {
   const draft = details.draft === undefined ? undefined : sanitizeDraftSnapshot(details.draft);
+  const source = details.source === undefined ? undefined : sanitizeSourceSummary(details.source);
   const warnings = details.warnings === undefined ? undefined : sanitizeWarnings(details.warnings);
   const result = details.result === undefined ? undefined : sanitizeText(details.result);
   const error = details.error === undefined ? undefined : sanitizeText(details.error);
   const sanitized = {
     ...(draft === undefined ? {} : { draft }),
+    ...(source === undefined ? {} : { source }),
     ...(warnings === undefined ? {} : { warnings }),
     ...(result === undefined ? {} : { result }),
     ...(error === undefined ? {} : { error })
   };
   return Object.keys(sanitized).length === 0 ? undefined : sanitized;
+}
+
+function parseSourceSummary(value: unknown): OperationSourceSummary | undefined {
+  if (
+    !isRecord(value) ||
+    !isProductPlatform(value.platform) ||
+    !isBoundedText(value.canonicalUrl, 4_096, false) ||
+    !isRecord(value.fields) ||
+    typeof value.fields.title !== 'boolean' ||
+    typeof value.fields.description !== 'boolean' ||
+    typeof value.fields.price !== 'boolean' ||
+    typeof value.fields.originalPrice !== 'boolean' ||
+    typeof value.fields.imageCount !== 'number' ||
+    !Number.isInteger(value.fields.imageCount)
+  ) {
+    return undefined;
+  }
+  return sanitizeSourceSummary({
+    platform: value.platform,
+    canonicalUrl: value.canonicalUrl,
+    fields: {
+      title: value.fields.title,
+      description: value.fields.description,
+      price: value.fields.price,
+      originalPrice: value.fields.originalPrice,
+      imageCount: value.fields.imageCount
+    }
+  });
 }
 
 export function sanitizeLogEntry(entry: OperationLogEntry): OperationLogEntry {
@@ -264,6 +342,7 @@ function parseDetails(value: unknown): OperationLogDetails | undefined {
     return undefined;
   }
   const draft = parseDraftSnapshot(value.draft);
+  const source = parseSourceSummary(value.source);
   const warnings =
     Array.isArray(value.warnings) &&
     value.warnings.length <= MAX_LOG_WARNINGS &&
@@ -274,6 +353,7 @@ function parseDetails(value: unknown): OperationLogDetails | undefined {
   const error = isBoundedText(value.error, MAX_LOG_TEXT_LENGTH) ? value.error : undefined;
   return sanitizeDetails({
     ...(draft === undefined ? {} : { draft }),
+    ...(source === undefined ? {} : { source }),
     ...(warnings === undefined ? {} : { warnings }),
     ...(result === undefined ? {} : { result }),
     ...(error === undefined ? {} : { error })

@@ -430,6 +430,34 @@ describe('App', () => {
     expect(screen.queryByText('高')).toBeNull();
   });
 
+  it('把售价和商品图缺失警告显示在对应字段附近', async () => {
+    const priceWarning = '未能可靠识别售价，请手动填写';
+    const imageWarning = '未能可靠识别商品图片，请手动补充';
+    render(
+      <App
+        services={createServices({
+          parseProduct: () =>
+            Promise.resolve({
+              ...parsedProduct,
+              warnings: [priceWarning, imageWarning]
+            })
+        })}
+      />
+    );
+    fireEvent.change(screen.getByLabelText('商品链接'), {
+      target: { value: parsedProduct.canonicalUrl }
+    });
+    fireEvent.click(screen.getByRole('button', { name: '解析商品' }));
+
+    await screen.findByDisplayValue('测试商品');
+    expect(
+      screen.getAllByText(priceWarning).some((element) => element.getAttribute('role') === 'status')
+    ).toBe(true);
+    expect(
+      screen.getAllByText(imageWarning).some((element) => element.getAttribute('role') === 'status')
+    ).toBe(true);
+  });
+
   it('空白手动草稿返回初始双入口并清除持久化草稿', async () => {
     let cleared = 0;
     render(

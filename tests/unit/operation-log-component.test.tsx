@@ -31,6 +31,41 @@ const detailedEntry: OperationLogEntry = {
 };
 
 describe('OperationLog', () => {
+  it('来源解析记录只显示平台、规范链接和字段完成度', () => {
+    const sourceEntry: OperationLogEntry = {
+      id: 'source-log',
+      timestamp: '2026-09-01T10:00:00.000Z',
+      stage: 'parse',
+      outcome: 'success',
+      message: '商品解析完成',
+      operationLabel: '商品解析',
+      details: {
+        source: {
+          platform: 'tmall',
+          canonicalUrl: 'https://detail.tmall.com/item.htm?id=200',
+          fields: {
+            title: true,
+            description: false,
+            price: true,
+            originalPrice: false,
+            imageCount: 2
+          }
+        },
+        result: '商品解析完成'
+      }
+    };
+
+    render(<OperationLog entries={[sourceEntry]} />);
+    fireEvent.click(screen.getByRole('button', { name: /商品解析/u }));
+
+    expect(screen.getByText('天猫')).toBeVisible();
+    expect(screen.getByText('https://detail.tmall.com/item.htm?id=200')).toBeVisible();
+    expect(screen.getByText('2 张')).toBeVisible();
+    expect(screen.getAllByText('已识别')).toHaveLength(2);
+    expect(screen.getAllByText('未识别')).toHaveLength(2);
+    expect(screen.queryByText('标题与描述原文')).not.toBeInTheDocument();
+  });
+
   it('外层显示快照标题，点击后显示链接和表单内容', () => {
     render(<OperationLog entries={[detailedEntry]} />);
 

@@ -106,6 +106,36 @@ function withHintedTitle(
   };
 }
 
+function applyExtractionQualityGate(product: ParsedProduct): ProductExtractionResponse {
+  if (product.title.trim().length === 0) {
+    return {
+      ok: false,
+      error: { code: 'TITLE_MISSING', message: '未能可靠识别商品标题，请重试或手动填写' }
+    };
+  }
+  if (product.price === null && product.images.length === 0) {
+    return {
+      ok: false,
+      error: {
+        code: 'PRODUCT_INCOMPLETE',
+        message: '仅识别到商品标题，售价和商品图均缺失，请重试或手动填写'
+      }
+    };
+  }
+  const warnings = product.warnings.filter(
+    (warning) =>
+      warning !== '未能识别商品价格，请手动填写' &&
+      warning !== '未能识别商品图片，请手动补充'
+  );
+  if (product.price === null) {
+    warnings.push('未能可靠识别售价，请手动填写');
+  }
+  if (product.images.length === 0) {
+    warnings.push('未能可靠识别商品图片，请手动补充');
+  }
+  return { ok: true, product: { ...product, warnings: [...new Set(warnings)] } };
+}
+
 export async function parseProductDocument(
   document: Document,
   pageUrl: string,
@@ -148,5 +178,5 @@ export async function extractProductDocument(
     return { ok: false, error: pageError };
   }
   const product = await parseProductDocument(document, pageUrl, dependencies);
-  return { ok: true, product: withHintedTitle(product, pageUrl, hintedTitle) };
+  return applyExtractionQualityGate(withHintedTitle(product, pageUrl, hintedTitle));
 }

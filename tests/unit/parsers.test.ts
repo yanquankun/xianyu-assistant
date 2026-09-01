@@ -506,7 +506,10 @@ describe('parseProductDocument', () => {
     ['型号 404 限量版，不是错误页', '正常型号商品']
   ])('不把正文中的裸状态码数字当作 HTTP 错误：%s', async (bodyText, title) => {
     const document = new DOMParser().parseFromString(
-      `<!doctype html><html><head><meta property="og:title" content="${title}" /></head><body>${bodyText}</body></html>`,
+      `<!doctype html><html><head>
+        <meta property="og:title" content="${title}" />
+        <meta property="product:price:amount" content="500" />
+      </head><body>${bodyText}</body></html>`,
       'text/html'
     );
 
@@ -538,33 +541,102 @@ describe('parseProductDocument', () => {
   });
 
   it.each([
-    ['https://item.jd.com/product/100.html', 'jd'],
-    ['https://item.taobao.com/item.htm?id=1', 'taobao'],
-    ['https://detail.tmall.com/item.htm?id=1', 'tmall']
-  ] as const)(
-    '仅在有效 %s 商品路由缺少真实标题时使用分享标题',
-    async (pageUrl, platform) => {
-    const document = new DOMParser().parseFromString(
-      '<!doctype html><html><body></body></html>',
-      'text/html'
-    );
+    'https://item.jd.com/product/100.html',
+    'https://item.taobao.com/item.htm?id=1',
+    'https://detail.tmall.com/item.htm?id=1'
+  ])('分享标题是唯一证据时返回信息不完整：%s', async (pageUrl) => {
+      const document = new DOMParser().parseFromString(
+        '<!doctype html><html><body></body></html>',
+        'text/html'
+      );
       const result = await extractProductDocument(document, pageUrl, '分享文案标题');
 
-      expect(result.ok).toBe(true);
-      if (!result.ok) {
-        throw new Error('有效商品页应产生商品');
-      }
-      expect(result.product.platform).toBe(platform);
-      expect(result.product.title).toBe('分享文案标题');
-      expect(result.product.price).toBeNull();
-      expect(result.product.images).toEqual([]);
-      expect(result.product.warnings).toContain('标题来自分享文案，请核对');
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          code: 'PRODUCT_INCOMPLETE',
+          message: '仅识别到商品标题，售价和商品图均缺失，请重试或手动填写'
+        }
+      });
+      expect(JSON.stringify(result)).not.toContain('分享文案标题');
+    });
+
+  it('没有标题时即使识别到售价和商品图也拒绝结果', async () => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html><html><head>
+        <meta property="product:price:amount" content="88" />
+        <meta property="og:image" content="https://img.example.com/a.jpg" />
+      </head></html>`,
+      'text/html'
+    );
+
+    await expect(
+      extractProductDocument(document, 'https://shop.example.com/product/1')
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: 'TITLE_MISSING', message: '未能可靠识别商品标题，请重试或手动填写' }
+    });
+  });
+
+  it('标题加售价可以成功，但给出商品图字段警告', async () => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html><html><head>
+        <meta property="og:title" content="有售价商品" />
+        <meta property="product:price:amount" content="88" />
+      </head></html>`,
+      'text/html'
+    );
+    const result = await extractProductDocument(document, 'https://shop.example.com/product/2');
+
+    expect(result).toMatchObject({ ok: true, product: { title: '有售价商品', price: 88 } });
+    if (!result.ok) {
+      throw new Error('标题加售价应允许进入编辑');
     }
-  );
+    expect(result.product.warnings).toContain('未能可靠识别商品图片，请手动补充');
+  });
+
+  it('标题加商品图可以成功，但给出售价字段警告', async () => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html><html><head>
+        <meta property="og:title" content="有图片商品" />
+        <meta property="og:image" content="https://img.example.com/a.jpg" />
+      </head></html>`,
+      'text/html'
+    );
+    const result = await extractProductDocument(document, 'https://shop.example.com/product/3');
+
+    expect(result).toMatchObject({ ok: true, product: { title: '有图片商品', price: null } });
+    if (!result.ok) {
+      throw new Error('标题加商品图应允许进入编辑');
+    }
+    expect(result.product.warnings).toContain('未能可靠识别售价，请手动填写');
+  });
+
+  it('条件售价通过质量门禁并保留条件警告', async () => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html>
+      <div data-title="product-title">条件价商品</div>
+      <section data-price-region="product"><span>券后价</span><span data-sale-price>¥66.00</span></section>`,
+      'text/html'
+    );
+    const result = await extractProductDocument(
+      document,
+      'https://item.taobao.com/item.htm?id=100'
+    );
+
+    expect(result).toMatchObject({ ok: true, product: { price: 66 } });
+    if (!result.ok) {
+      throw new Error('条件售价仍是有效的当前商品售价');
+    }
+    expect(result.product.warnings).toContain('当前售价为券后价，请发布前核对适用条件');
+  });
 
   it('真实页面标题优先于分享标题', async () => {
     const document = new DOMParser().parseFromString(
-      '<!doctype html><html><head><title>真实页面标题</title></head></html>',
+      `<!doctype html><html><head>
+        <title>真实页面标题</title>
+        <meta property="product:price:amount" content="88" />
+      </head></html>`,
       'text/html'
     );
     const result = await extractProductDocument(

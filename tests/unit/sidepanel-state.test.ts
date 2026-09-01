@@ -247,6 +247,26 @@ describe('reduceWorkflow', () => {
     expect(state.draft).toEqual(draft);
   });
 
+  it('解析失败不覆盖已有草稿', () => {
+    const parsing = reduceWorkflow(
+      { ...initialWorkflowState, draft },
+      {
+        type: 'PARSE_STARTED',
+        operationId: 'operation-failed',
+        url: 'https://item.jd.com/2.html'
+      }
+    );
+
+    const failed = reduceWorkflow(parsing, {
+      type: 'PARSE_FAILED',
+      operationId: 'operation-failed',
+      message: '仅识别到商品标题，售价和商品图均缺失，请重试或手动填写'
+    });
+
+    expect(failed.phase).toBe('error');
+    expect(failed.draft).toBe(draft);
+  });
+
   it('解析成功草稿同时保留提交短链和最终规范 URL', () => {
     const parsing = reduceWorkflow(initialWorkflowState, {
       type: 'PARSE_STARTED',

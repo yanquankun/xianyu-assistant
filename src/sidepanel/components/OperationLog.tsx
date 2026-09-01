@@ -1,6 +1,10 @@
 import { useState } from 'react';
 
-import type { OperationDraftSnapshot, OperationLogEntry } from '../../storage/operation-log';
+import type {
+  OperationDraftSnapshot,
+  OperationLogEntry,
+  OperationSourceSummary
+} from '../../storage/operation-log';
 
 interface OperationLogProps {
   entries: readonly OperationLogEntry[];
@@ -11,6 +15,13 @@ const OUTCOME_LABELS = {
   failure: '失败',
   warning: '警告'
 } as const;
+
+const PLATFORM_LABELS: Record<OperationSourceSummary['platform'], string> = {
+  taobao: '淘宝',
+  tmall: '天猫',
+  jd: '京东',
+  generic: '其他'
+};
 
 function getDisplayTitle(entry: OperationLogEntry): string {
   const displayTitle = entry.displayTitle?.trim();
@@ -150,6 +161,35 @@ function DraftDetails({ draft }: { draft: OperationDraftSnapshot }) {
   );
 }
 
+function SourceDetails({ source }: { source: OperationSourceSummary }) {
+  return (
+    <dl className="log-details__fields">
+      <div>
+        <dt>来源平台</dt>
+        <dd>{PLATFORM_LABELS[source.platform]}</dd>
+      </div>
+      <SafeUrlRow label="最终规范链接" url={source.canonicalUrl} />
+      {(
+        [
+          ['标题', source.fields.title],
+          ['描述', source.fields.description],
+          ['售价', source.fields.price],
+          ['原价', source.fields.originalPrice]
+        ] as const
+      ).map(([label, completed]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>{completed ? '已识别' : '未识别'}</dd>
+        </div>
+      ))}
+      <div>
+        <dt>商品图</dt>
+        <dd>{source.fields.imageCount} 张</dd>
+      </div>
+    </dl>
+  );
+}
+
 function LogDetails({ entry }: { entry: OperationLogEntry }) {
   const details = entry.details;
   if (details === undefined) {
@@ -158,6 +198,7 @@ function LogDetails({ entry }: { entry: OperationLogEntry }) {
   return (
     <div className="log-details">
       {details.draft === undefined ? null : <DraftDetails draft={details.draft} />}
+      {details.source === undefined ? null : <SourceDetails source={details.source} />}
       {details.warnings === undefined || details.warnings.length === 0 ? null : (
         <div className="log-details__section">
           <h3>警告</h3>

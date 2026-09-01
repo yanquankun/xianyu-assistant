@@ -62,6 +62,9 @@ export function ProductEditor({
     onChange(nextDraft);
   };
 
+  const priceWarning = draft.warnings.find((warning) => /售价|价格/u.test(warning));
+  const imageWarning = draft.warnings.find((warning) => /商品图|图片/u.test(warning));
+
   return (
     <section className="editor-card">
       <div className="section-heading">
@@ -117,6 +120,11 @@ export function ProductEditor({
           />
         </label>
       </div>
+      {priceWarning === undefined ? null : (
+        <p className="field-hint" role="status">
+          {priceWarning}
+        </p>
+      )}
 
       <label className="field">
         <span>商品描述</span>
@@ -146,6 +154,11 @@ export function ProductEditor({
 
       <div className="field">
         <span>商品媒体</span>
+        {imageWarning === undefined ? null : (
+          <p className="field-hint" role="status">
+            {imageWarning}
+          </p>
+        )}
         <MediaPicker
           images={draft.images}
           videos={draft.videos}

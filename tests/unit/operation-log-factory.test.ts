@@ -62,7 +62,9 @@ const draft: ProductDraft = {
 };
 
 describe('operation log factory', () => {
-  it('解析成功快照同时保留提交短链和最终规范 URL', () => {
+  it('解析成功日志只保留字段完成度和规范 URL', () => {
+    const sourceTitle = '不得写入日志的来源标题';
+    const sourceDescription = '不得写入日志的来源描述';
     const entry = createSuccessLogEntry(
       {
         type: 'PARSE_PRODUCT',
@@ -75,23 +77,44 @@ describe('operation log factory', () => {
         platform: 'jd',
         submittedUrl: 'https://3.cn/short?jkl=@code@',
         canonicalUrl: 'https://item.jd.com/product/1.html',
-        title: '真实标题',
-        description: '',
-        price: null,
+        title: sourceTitle,
+        description: sourceDescription,
+        price: 88,
+        originalPrice: 99,
         currency: 'CNY',
-        images: [],
-        warnings: [],
-        confidence: 'low'
+        images: [
+          {
+            id: 'source-image',
+            location: {
+              kind: 'remote',
+              url: 'https://img.example.com/source.jpg',
+              extractedBy: 'platform-gallery'
+            },
+            loadStatus: 'idle'
+          }
+        ],
+        warnings: ['当前售价为到手价，请发布前核对适用条件'],
+        confidence: 'high'
       },
       'parse-log',
       '2026-08-31T14:00:00.000Z'
     );
 
-    expect(entry.details?.draft).toMatchObject({
-      sourceUrl: 'https://3.cn/short',
-      canonicalUrl: 'https://item.jd.com/product/1.html'
+    expect(entry).not.toHaveProperty('displayTitle');
+    expect(entry.details).not.toHaveProperty('draft');
+    expect(entry.details?.source).toEqual({
+      platform: 'jd',
+      canonicalUrl: 'https://item.jd.com/product/1.html',
+      fields: {
+        title: true,
+        description: true,
+        price: true,
+        originalPrice: true,
+        imageCount: 1
+      }
     });
-    expect(JSON.stringify(entry)).not.toContain('分享标题');
+    const serialized = JSON.stringify(entry);
+    expect(serialized).not.toMatch(/分享标题|不得写入日志的来源标题|不得写入日志的来源描述|@code@/u);
   });
 
   it('AI 成功记录使用生成标题并保存不可变表单快照', () => {

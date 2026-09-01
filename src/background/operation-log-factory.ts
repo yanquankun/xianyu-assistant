@@ -118,19 +118,18 @@ function buildSuccessDetails(
         return { message: '商品解析完成' };
       }
       return {
-        displayTitle: product.title,
         message: '商品解析完成',
         details: {
-          draft: {
-            sourceUrl: message.submittedUrl,
+          source: {
+            platform: product.platform,
             canonicalUrl: product.canonicalUrl,
-            title: product.title,
-            description: product.description,
-            ...(product.price === null ? {} : { price: product.price }),
-            ...(product.originalPrice === undefined
-              ? {}
-              : { originalPrice: product.originalPrice }),
-            selectedImageCount: product.images.length
+            fields: {
+              title: product.title.trim().length > 0,
+              description: product.description.trim().length > 0,
+              price: product.price !== null,
+              originalPrice: product.originalPrice !== undefined,
+              imageCount: product.images.length
+            }
           },
           ...(product.warnings.length === 0 ? {} : { warnings: product.warnings }),
           result: '商品解析完成'
