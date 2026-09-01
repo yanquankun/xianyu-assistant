@@ -32,6 +32,12 @@ describe('product URL identity', () => {
       'jd',
       '202',
       'https://item.m.jd.com/product/202.html'
+    ],
+    [
+      'https://item.m.jd.com/ware/view.action?utm_campaign=t_1001328990&wareId=10231650915576',
+      'jd',
+      '10231650915576',
+      'https://item.m.jd.com/ware/view.action?wareId=10231650915576'
     ]
   ] as const)(
     '提取 %s 的平台、商品主标识和规范链接',

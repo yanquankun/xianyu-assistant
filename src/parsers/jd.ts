@@ -68,16 +68,14 @@ function itemImageValues(item: Record<string, unknown> | null): string[] {
 
 function normalizeImageKey(value: string, pageUrl: string): string | null {
   const rawPath = value.split(/[?#]/u, 1)[0];
-  const resolved = rawPath === undefined || /^\/?jfs\//u.test(rawPath) ? null : resolveUrl(value, pageUrl);
+  const resolved =
+    rawPath === undefined || /^\/?jfs\//u.test(rawPath) ? null : resolveUrl(value, pageUrl);
   const pathname = resolved === null ? rawPath : new URL(resolved).pathname;
   if (pathname === undefined || pathname.length === 0) {
     return null;
   }
-  const normalized = `/${pathname.replace(/^\/+|^n\d+\/(?:s\d+x\d+_)?/u, '')}`.replace(
-    /^\/(?:n\d+\/)?(?:s\d+x\d+_)?(?=jfs\/)/u,
-    '/'
-  );
-  return normalized.startsWith('/jfs/') ? normalized : null;
+  const match = /(?:^|[/_])(jfs\/.*)$/u.exec(pathname);
+  return match?.[1] === undefined ? null : `/${match[1].replace(/!.*$/u, '')}`;
 }
 
 function normalizeJdImageUrl(value: string, pageUrl: string): string | null {
@@ -135,7 +133,11 @@ function collectGalleryImages(
   let position = 0;
   for (const item of gallery.querySelectorAll('li')) {
     const type = item.getAttribute('data-type')?.toLowerCase();
-    if (type === 'video' || item.matches('[class*="video" i]')) {
+    if (
+      type === 'video' ||
+      item.matches('[class*="video" i]') ||
+      item.querySelector('video, [class*="video" i]') !== null
+    ) {
       continue;
     }
     const image = item.querySelector<HTMLImageElement>('img');

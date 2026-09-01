@@ -98,6 +98,19 @@ function buildAlibabaIdentity(url: URL, platform: 'taobao' | 'tmall'): ProductId
 
 function buildJdIdentity(url: URL): ProductIdentity | null {
   const host = url.hostname.toLowerCase();
+  if (host === 'item.m.jd.com' && url.pathname === '/ware/view.action') {
+    const productId = validDigits(url.searchParams.get('wareId'));
+    if (productId === undefined) {
+      return null;
+    }
+    const canonical = new URL('/ware/view.action', url.origin);
+    canonical.searchParams.set('wareId', productId);
+    return {
+      platform: 'jd',
+      productId,
+      canonicalUrl: canonical.href
+    };
+  }
   const productMatch =
     host === 'item.jd.com'
       ? /^\/(\d+)\.html$/u.exec(url.pathname)

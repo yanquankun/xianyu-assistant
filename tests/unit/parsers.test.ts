@@ -329,6 +329,68 @@ describe('parseProductDocument', () => {
     expect(JSON.stringify(result)).not.toContain('video-cover');
   });
 
+  it('识别京东移动页 mobilecms 高分辨率图库地址', async () => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html><script>
+        window._itemOnly = ({"item":{"skuId":"100","skuName":"京东移动商品","image":["jfs/t1/a.jpg","jfs/t1/b.jpg"]}});
+        window._itemInfo = ({"stock":{"skuId":"100","realSkuId":"100"}});
+      </script>
+      <ul id="loopImgUl">
+        <li><img back_src="//m.360buyimg.com/mobilecms/s1350x1350_jfs/t1/a.jpg!q70.dpg.webp" /></li>
+        <li><img back_src="//m.360buyimg.com/mobilecms/s1350x1350_jfs/t1/b.jpg!q70.dpg.webp" /></li>
+      </ul>`,
+      'text/html'
+    );
+    const context = {
+      platform: 'jd' as const,
+      pageUrl: 'https://item.m.jd.com/product/100.html',
+      productId: '100',
+      skuId: '100'
+    };
+
+    const evidence = await collectJdEvidence(document, context, {
+      loadPriceFont: () => Promise.reject(new Error('不应加载字体'))
+    });
+    const result = mergeProductEvidence(evidence, context);
+
+    expect(result.images.map(getRemoteImageUrl)).toEqual([
+      'https://m.360buyimg.com/mobilecms/s1350x1350_jfs/t1/a.jpg!q70.dpg.webp',
+      'https://m.360buyimg.com/mobilecms/s1350x1350_jfs/t1/b.jpg!q70.dpg.webp'
+    ]);
+  });
+
+  it('跳过京东移动页视频组件中的重复首图', async () => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html><script>
+        window._itemOnly = ({"item":{"skuId":"100","skuName":"京东移动商品","image":["jfs/t1/a.jpg"]}});
+        window._itemInfo = ({"stock":{"skuId":"100","realSkuId":"100"}});
+      </script>
+      <ul id="loopImgUl">
+        <li>
+          <img src="//m.360buyimg.com/mobilecms/s750x750_jfs/t1/a.jpg!q80.dpg" />
+          <div class="video_play"></div>
+        </li>
+        <li><img back_src="//m.360buyimg.com/mobilecms/s1350x1350_jfs/t1/a.jpg!q70.dpg.webp" /></li>
+      </ul>`,
+      'text/html'
+    );
+    const context = {
+      platform: 'jd' as const,
+      pageUrl: 'https://item.m.jd.com/product/100.html',
+      productId: '100',
+      skuId: '100'
+    };
+
+    const evidence = await collectJdEvidence(document, context, {
+      loadPriceFont: () => Promise.reject(new Error('不应加载字体'))
+    });
+    const result = mergeProductEvidence(evidence, context);
+
+    expect(result.images.map(getRemoteImageUrl)).toEqual([
+      'https://m.360buyimg.com/mobilecms/s1350x1350_jfs/t1/a.jpg!q70.dpg.webp'
+    ]);
+  });
+
   it('兼容京东商品状态的尾逗号并忽略同一脚本中的动态覆盖赋值', async () => {
     const document = new DOMParser().parseFromString(
       `<!doctype html><script>
