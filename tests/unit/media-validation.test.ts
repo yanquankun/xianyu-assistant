@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   MAX_IMAGE_BYTES,
-  MAX_SELECTED_IMAGES,
+  MAX_MEDIA_COUNT,
   MAX_TOTAL_IMAGE_BYTES,
   MAX_VIDEO_BYTES,
   validateImageBatch,
@@ -36,7 +36,10 @@ describe('validateImageBatch', () => {
 
     expect(result.accepted.map((file) => file.name)).toEqual(['one.jpg']);
     expect(result.rejected).toEqual([
-      { fileName: 'two.webp', reason: `最多只能选择 ${String(MAX_SELECTED_IMAGES)} 张图片` }
+      {
+        fileName: 'two.webp',
+        reason: `图片和视频合计最多只能添加 ${String(MAX_MEDIA_COUNT)} 个`
+      }
     ]);
   });
 
@@ -53,13 +56,16 @@ describe('validateImageBatch', () => {
         new File([new Uint8Array(MAX_IMAGE_BYTES)], 'second.jpg', { type: 'image/jpeg' }),
         batchOverflow
       ],
-      MAX_SELECTED_IMAGES
+      MAX_MEDIA_COUNT
     );
 
     expect(result.accepted.map((file) => file.name)).toEqual(['first.jpg', 'second.jpg']);
     expect(result.rejected).toEqual([
       { fileName: 'large.png', reason: '图片不能超过 10 MB' },
-      { fileName: 'overflow.webp', reason: `图片总大小不能超过 ${String(MAX_TOTAL_IMAGE_BYTES / 1024 / 1024)} MB` }
+      {
+        fileName: 'overflow.webp',
+        reason: `图片总大小不能超过 ${String(MAX_TOTAL_IMAGE_BYTES / 1024 / 1024)} MB`
+      }
     ]);
   });
 });

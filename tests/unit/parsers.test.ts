@@ -68,9 +68,7 @@ describe('parseProductDocument', () => {
     expect(result.platform).toBe('generic');
     expect(result.title).toBe('通用商品');
     expect(result.price).toBe(66.5);
-    expect(result.images.map(getRemoteImageUrl)).toEqual([
-      'https://shop.example.com/cover.jpg'
-    ]);
+    expect(result.images.map(getRemoteImageUrl)).toEqual(['https://shop.example.com/cover.jpg']);
     expect(result.warnings).toContain('页面结构化商品数据无法解析，已使用页面信息降级');
     expect(result.confidence).toBe('medium');
   });
@@ -89,7 +87,7 @@ describe('parseProductDocument', () => {
     expect(result.confidence).toBe('low');
   });
 
-  it('页面图片过多时只保留消息边界允许的前 20 张', () => {
+  it('页面图片过多时只保留共享媒体上限允许的前 9 张', () => {
     const images = Array.from(
       { length: 25 },
       (_, index) => `<meta property="og:image" content="/image-${String(index + 1)}.jpg" />`
@@ -101,11 +99,11 @@ describe('parseProductDocument', () => {
 
     const result = parseProductDocument(document, 'https://shop.example.com/product/many-images');
 
-    expect(result.images).toHaveLength(20);
+    expect(result.images).toHaveLength(9);
     const finalImage = result.images.at(-1);
     expect(finalImage).toBeDefined();
     expect(finalImage === undefined ? null : getRemoteImageUrl(finalImage)).toBe(
-      'https://shop.example.com/image-20.jpg'
+      'https://shop.example.com/image-9.jpg'
     );
   });
 
@@ -209,26 +207,28 @@ describe('parseProductDocument', () => {
     expect(JSON.stringify(result)).not.toContain('标题来自分享文案，请核对');
   });
 
-  it.each(['请输入验证码以继续访问', '请完成安全验证', '检测到访问风险，请完成验证', '扫码登录后继续']) (
-    'DOM 正文指向验证或登录页面时拒绝分享标题：%s',
-    (bodyText) => {
-      const document = new DOMParser().parseFromString(
-        `<!doctype html><html><body>${bodyText}</body></html>`,
-        'text/html'
-      );
-      const result = extractProductDocument(
-        document,
-        'https://item.jd.com/product/100.html',
-        '不得使用的分享标题'
-      );
+  it.each([
+    '请输入验证码以继续访问',
+    '请完成安全验证',
+    '检测到访问风险，请完成验证',
+    '扫码登录后继续'
+  ])('DOM 正文指向验证或登录页面时拒绝分享标题：%s', (bodyText) => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html><html><body>${bodyText}</body></html>`,
+      'text/html'
+    );
+    const result = extractProductDocument(
+      document,
+      'https://item.jd.com/product/100.html',
+      '不得使用的分享标题'
+    );
 
-      expect(result).toMatchObject({
-        ok: false,
-        error: { code: 'VERIFICATION_REQUIRED' }
-      });
-      expect(JSON.stringify(result)).not.toContain('不得使用的分享标题');
-    }
-  );
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'VERIFICATION_REQUIRED' }
+    });
+    expect(JSON.stringify(result)).not.toContain('不得使用的分享标题');
+  });
 
   it.each([
     'https://shop.example.com/product/100',
@@ -236,7 +236,10 @@ describe('parseProductDocument', () => {
     'https://item.jd.com/verify/captcha',
     'https://item.jd.com/error/400.html'
   ])('普通页、登录页、验证页或错误路由不得使用分享标题：%s', (pageUrl) => {
-    const document = new DOMParser().parseFromString('<!doctype html><html><body></body></html>', 'text/html');
+    const document = new DOMParser().parseFromString(
+      '<!doctype html><html><body></body></html>',
+      'text/html'
+    );
     const result = extractProductDocument(document, pageUrl, '不得使用的标题');
 
     expect(JSON.stringify(result)).not.toContain('不得使用的标题');

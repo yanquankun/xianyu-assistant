@@ -31,26 +31,26 @@
   border: 0;
   cursor: pointer;
   display: block;
+  block-size: 100%;
   inline-size: 100%;
   padding: 0;
 }
 
 .image-tile__preview img {
-  aspect-ratio: 1;
-  block-size: auto;
+  block-size: 100%;
   inline-size: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
-.image-tile__local-name {
+.image-tile__placeholder {
   align-items: center;
-  aspect-ratio: 1;
+  block-size: 100%;
   background: var(--surface-muted, #f3f4f6);
-  color: inherit;
+  color: var(--muted);
   display: flex;
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   justify-content: center;
-  overflow-wrap: anywhere;
+  inline-size: 100%;
   padding: 0.5rem;
 }
 

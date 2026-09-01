@@ -6,11 +6,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ProductImage } from '../../src/domain/product';
 import type { MediaStore } from '../../src/storage/media-store';
 import {
-  downloadSelectedImages,
+  downloadImages,
   fillXianyuDraft,
   isXianyuFillPayload,
   parseXianyuFillResult,
-  prepareSelectedImages,
+  prepareImages,
   type ImageFetchLike,
   type XianyuFillPayload
 } from '../../src/xianyu/fill';
@@ -40,6 +40,53 @@ const validPayload: XianyuFillPayload = {
 };
 
 describe('fillXianyuDraft', () => {
+  it('没有图片和视频时仍填写文本且不把媒体记为跳过', async () => {
+    const result = await fillXianyuDraft(publishDocument(), { ...validPayload, images: [] }, []);
+
+    expect(result.filled).toEqual(expect.arrayContaining(['title', 'price', 'description']));
+    expect(result.skipped).toEqual([]);
+  });
+
+  it('一次把多个视频写入视频文件输入框', async () => {
+    const document = publishDocument();
+    const first = new File(['one'], 'one.mp4', { type: 'video/mp4' });
+    const second = new File(['two'], 'two.mov', { type: 'video/quicktime' });
+
+    const result = await fillXianyuDraft(document, validPayload, [first, second]);
+
+    expect(
+      Array.from(document.querySelector<HTMLInputElement>('input[name="video"]')?.files ?? []).map(
+        (file) => file.name
+      )
+    ).toEqual(['one.mp4', 'two.mov']);
+    expect(result.filled).toContain('video');
+  });
+
+  it('填表消息按图片和视频合计九个媒体校验', () => {
+    const videoTransfer = {
+      sessionId: 'session-1',
+      fileName: 'demo.mp4',
+      mimeType: 'video/mp4' as const,
+      byteLength: 5,
+      chunkBytes: 512 * 1024
+    };
+
+    expect(
+      isXianyuFillPayload({
+        ...validPayload,
+        images: new Array(8).fill(validPayload.images[0]),
+        videoTransfers: [videoTransfer]
+      })
+    ).toBe(true);
+    expect(
+      isXianyuFillPayload({
+        ...validPayload,
+        images: new Array(9).fill(validPayload.images[0]),
+        videoTransfers: [videoTransfer]
+      })
+    ).toBe(false);
+  });
+
   it('严格校验跨上下文填表消息边界', () => {
     expect(isXianyuFillPayload(validPayload)).toBe(true);
     expect(isXianyuFillPayload({ ...validPayload, price: Number.NaN })).toBe(false);
@@ -105,7 +152,7 @@ describe('fillXianyuDraft', () => {
     });
     const videoFile = new File(['video'], 'demo.mp4', { type: 'video/mp4' });
 
-    const result = await fillXianyuDraft(document, validPayload, videoFile);
+    const result = await fillXianyuDraft(document, validPayload, [videoFile]);
 
     expect(document.querySelector<HTMLInputElement>('input[name="images"]')?.files).toHaveLength(1);
     expect(document.querySelector<HTMLInputElement>('input[name="video"]')?.files?.[0]?.name).toBe(
@@ -119,11 +166,9 @@ describe('fillXianyuDraft', () => {
     const document = publishDocument();
     document.querySelector('input[name="video"]')?.remove();
 
-    const result = await fillXianyuDraft(
-      document,
-      validPayload,
+    const result = await fillXianyuDraft(document, validPayload, [
       new File(['video'], 'demo.mp4', { type: 'video/mp4' })
-    );
+    ]);
 
     expect(result.filled).toEqual(
       expect.arrayContaining(['title', 'price', 'description', 'images'])
@@ -140,11 +185,9 @@ describe('fillXianyuDraft', () => {
       'text/html'
     );
 
-    const result = await fillXianyuDraft(
-      document,
-      validPayload,
+    const result = await fillXianyuDraft(document, validPayload, [
       new File(['video'], 'demo.mov', { type: 'video/quicktime' })
-    );
+    ]);
 
     const inputs = document.querySelectorAll<HTMLInputElement>('input[type="file"]');
     expect(inputs[0]?.files?.[0]?.name).toBe('image-1.png');
@@ -207,19 +250,18 @@ describe('fillXianyuDraft', () => {
   });
 });
 
-describe('downloadSelectedImages', () => {
-  const selectedImage: ProductImage = {
-    id: 'selected',
+describe('downloadImages', () => {
+  const draftImage: ProductImage = {
+    id: 'draft-image',
     location: {
       kind: 'remote',
-      url: 'https://img.example.com/selected.png',
+      url: 'https://img.example.com/draft-image.png',
       extractedBy: 'open-graph'
     },
-    selected: true,
     loadStatus: 'loaded'
   };
   const images: ProductImage[] = [
-    selectedImage,
+    draftImage,
     {
       id: 'ignored',
       location: {
@@ -227,14 +269,13 @@ describe('downloadSelectedImages', () => {
         url: 'https://img.example.com/ignored.png',
         extractedBy: 'open-graph'
       },
-      selected: false,
       loadStatus: 'loaded'
     }
   ];
 
-  it('只下载已选择的有效图片并转换为可传输内容', async () => {
+  it('下载草稿中的全部有效图片并转换为可传输内容', async () => {
     const requested: string[] = [];
-    const result = await downloadSelectedImages((input) => {
+    const result = await downloadImages((input) => {
       requested.push(
         typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
       );
@@ -246,11 +287,20 @@ describe('downloadSelectedImages', () => {
       );
     }, images);
 
-    expect(requested).toEqual(['https://img.example.com/selected.png']);
+    expect(requested).toEqual([
+      'https://img.example.com/draft-image.png',
+      'https://img.example.com/ignored.png'
+    ]);
     expect(result.files).toEqual([
       {
-        id: 'selected',
-        name: 'selected.png',
+        id: 'draft-image',
+        name: 'draft-image.png',
+        mimeType: 'image/png',
+        dataBase64: 'AQID'
+      },
+      {
+        id: 'ignored',
+        name: 'ignored.png',
         mimeType: 'image/png',
         dataBase64: 'AQID'
       }
@@ -258,15 +308,15 @@ describe('downloadSelectedImages', () => {
     expect(result.failures).toEqual([]);
   });
 
-  it('已选择但尚未加载成功的图片不会进入下载队列', async () => {
+  it('尚未加载成功的草稿图片不会进入下载队列', async () => {
     const idleImage: ProductImage = {
-      ...selectedImage,
+      ...draftImage,
       id: 'idle',
       loadStatus: 'idle'
     };
     let requested = false;
 
-    const result = await downloadSelectedImages(() => {
+    const result = await downloadImages(() => {
       requested = true;
       return Promise.resolve(new Response());
     }, [idleImage]);
@@ -282,9 +332,9 @@ describe('downloadSelectedImages', () => {
     ['text/html', '图片响应类型不受支持'],
     ['image/svg+xml', '图片响应类型不受支持']
   ])('拒绝不支持的 MIME 类型 %s', async (mimeType, expectedMessage) => {
-    const result = await downloadSelectedImages(
+    const result = await downloadImages(
       () => Promise.resolve(new Response('invalid', { headers: { 'content-type': mimeType } })),
-      [selectedImage]
+      [draftImage]
     );
 
     expect(result.files).toEqual([]);
@@ -292,14 +342,14 @@ describe('downloadSelectedImages', () => {
   });
 
   it('拒绝超过单张上限的图片', async () => {
-    const result = await downloadSelectedImages(
+    const result = await downloadImages(
       () =>
         Promise.resolve(
           new Response(new Uint8Array([1]), {
             headers: { 'content-type': 'image/jpeg', 'content-length': '10485761' }
           })
         ),
-      [selectedImage]
+      [draftImage]
     );
 
     expect(result.files).toEqual([]);
@@ -309,10 +359,7 @@ describe('downloadSelectedImages', () => {
   it('图片下载超时后返回失败，不会永久阻塞填表', async () => {
     vi.useFakeTimers();
     try {
-      const operation = downloadSelectedImages(
-        () => new Promise<Response>(() => undefined),
-        [selectedImage]
-      );
+      const operation = downloadImages(() => new Promise<Response>(() => undefined), [draftImage]);
       const resultExpectation = expect(operation).resolves.toMatchObject({
         files: [],
         failures: [{ message: '图片下载超时，请稍后重试' }]
@@ -333,7 +380,7 @@ describe('downloadSelectedImages', () => {
         status: 200,
         headers: { 'content-type': 'image/png' }
       });
-      const operation = downloadSelectedImages(() => Promise.resolve(response), [selectedImage]);
+      const operation = downloadImages(() => Promise.resolve(response), [draftImage]);
       const resultExpectation = expect(operation).resolves.toMatchObject({
         files: [],
         failures: [{ message: '图片下载超时，请稍后重试' }]
@@ -347,9 +394,9 @@ describe('downloadSelectedImages', () => {
     }
   });
 
-  it('最多传输 9 张已选择图片', async () => {
-    const selected = Array.from({ length: 10 }, (_, index) => ({
-      ...selectedImage,
+  it('最多传输共享媒体上限允许的 9 张图片', async () => {
+    const images = Array.from({ length: 10 }, (_, index) => ({
+      ...draftImage,
       id: `image-${String(index + 1)}`,
       location: {
         kind: 'remote' as const,
@@ -359,50 +406,50 @@ describe('downloadSelectedImages', () => {
     }));
     let requests = 0;
 
-    const result = await downloadSelectedImages(() => {
+    const result = await downloadImages(() => {
       requests += 1;
       return Promise.resolve(
         new Response(new Uint8Array([1]), { headers: { 'content-type': 'image/png' } })
       );
-    }, selected);
+    }, images);
 
     expect(requests).toBe(9);
     expect(result.files).toHaveLength(9);
-    expect(result.failures[0]?.message).toContain('最多处理 9 张图片');
+    expect(result.failures[0]?.message).toContain('最多处理 9 个媒体');
   });
 
   it('未加载图片仍占用 9 张选择上限，不能用后续图片绕过', async () => {
-    const selected = Array.from({ length: 10 }, (_, index) => ({
-      ...selectedImage,
-      id: `selected-${String(index + 1)}`,
+    const images = Array.from({ length: 10 }, (_, index) => ({
+      ...draftImage,
+      id: `draft-${String(index + 1)}`,
       loadStatus: index === 0 ? ('idle' as const) : ('loaded' as const),
       location: {
         kind: 'remote' as const,
-        url: `https://img.example.com/selected-${String(index + 1)}.png`,
+        url: `https://img.example.com/draft-${String(index + 1)}.png`,
         extractedBy: 'open-graph' as const
       }
     }));
     let requests = 0;
 
-    const result = await downloadSelectedImages(() => {
+    const result = await downloadImages(() => {
       requests += 1;
       return Promise.resolve(
         new Response(new Uint8Array([1]), { headers: { 'content-type': 'image/png' } })
       );
-    }, selected);
+    }, images);
 
     expect(requests).toBe(8);
-    expect(result.failures.find((failure) => failure.id === 'selected-1')?.message).toBe(
+    expect(result.failures.find((failure) => failure.id === 'draft-1')?.message).toBe(
       '图片尚未成功加载'
     );
-    expect(result.failures.find((failure) => failure.id === 'selected-10')?.message).toContain(
-      '最多处理 9 张图片'
+    expect(result.failures.find((failure) => failure.id === 'draft-10')?.message).toContain(
+      '最多处理 9 个媒体'
     );
   });
 
   it('图片原始数据总量不超过 20 MB', async () => {
-    const selected = Array.from({ length: 3 }, (_, index) => ({
-      ...selectedImage,
+    const images = Array.from({ length: 3 }, (_, index) => ({
+      ...draftImage,
       id: `large-${String(index + 1)}`,
       location: {
         kind: 'remote' as const,
@@ -411,14 +458,14 @@ describe('downloadSelectedImages', () => {
       }
     }));
 
-    const result = await downloadSelectedImages(
+    const result = await downloadImages(
       () =>
         Promise.resolve(
           new Response(new Uint8Array(8 * 1024 * 1024), {
             headers: { 'content-type': 'image/png' }
           })
         ),
-      selected
+      images
     );
 
     expect(result.files).toHaveLength(2);
@@ -426,8 +473,8 @@ describe('downloadSelectedImages', () => {
   });
 });
 
-describe('prepareSelectedImages', () => {
-  it('从本地媒体仓储读取已选择图片', async () => {
+describe('prepareImages', () => {
+  it('从本地媒体仓储读取草稿图片', async () => {
     const fetchMock: ImageFetchLike = () => Promise.reject(new Error('本地图片不应触发网络请求'));
     const mediaStoreMock: Pick<MediaStore, 'get'> = {
       get: () =>
@@ -442,7 +489,7 @@ describe('prepareSelectedImages', () => {
         })
     };
 
-    const result = await prepareSelectedImages(fetchMock, mediaStoreMock, [
+    const result = await prepareImages(fetchMock, mediaStoreMock, [
       {
         id: 'local-1',
         location: {
@@ -452,7 +499,6 @@ describe('prepareSelectedImages', () => {
           mimeType: 'image/png',
           byteLength: 3
         },
-        selected: true,
         loadStatus: 'loaded'
       }
     ]);
@@ -463,7 +509,7 @@ describe('prepareSelectedImages', () => {
   });
 
   it('本地资源缺失时安全跳过且不阻止其余图片', async () => {
-    const result = await prepareSelectedImages(
+    const result = await prepareImages(
       () =>
         Promise.resolve(
           new Response(new Uint8Array([4, 5]), {
@@ -481,7 +527,6 @@ describe('prepareSelectedImages', () => {
             mimeType: 'image/png',
             byteLength: 3
           },
-          selected: true,
           loadStatus: 'loaded'
         },
         {
@@ -491,7 +536,6 @@ describe('prepareSelectedImages', () => {
             url: 'https://img.example.com/remote.jpg',
             extractedBy: 'dom'
           },
-          selected: true,
           loadStatus: 'loaded'
         }
       ]
@@ -507,7 +551,7 @@ describe('prepareSelectedImages', () => {
   ])('本地图片统一执行 MIME 与单图大小限制：%s', async (mimeType, byteLength, message) => {
     const blob = new Blob([new Uint8Array([1, 2, 3])], { type: mimeType });
     Object.defineProperty(blob, 'size', { value: byteLength });
-    const result = await prepareSelectedImages(
+    const result = await prepareImages(
       () => Promise.reject(new Error('不应下载本地图片')),
       {
         get: () =>
@@ -531,7 +575,6 @@ describe('prepareSelectedImages', () => {
             mimeType: 'image/png',
             byteLength: 3
           },
-          selected: true,
           loadStatus: 'loaded'
         }
       ]

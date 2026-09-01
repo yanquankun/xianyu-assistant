@@ -27,6 +27,21 @@ describe('detectLoginState', () => {
     );
   });
 
+  it('首页包含真实的个人主页入口时返回已登录', () => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html><html><body><header>
+        <a href="https://www.goofish.com/personal" target="_blank">
+          <img src="https://img.alicdn.com/avatar.png" />
+          <div>Minttter</div>
+        </a>
+        <a href="https://www.goofish.com/bought" target="_blank">订单</a>
+      </header></body></html>`,
+      'text/html'
+    );
+
+    expect(detectLoginState(document, 'https://www.goofish.com/')).toBe('logged-in');
+  });
+
   it('页面既没有登录提示也没有用户标识时返回未知', () => {
     const document = new DOMParser().parseFromString(
       '<!doctype html><html><body><main>页面加载中</main></body></html>',

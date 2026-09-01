@@ -1,10 +1,7 @@
 import type { RuntimeMessage } from '../domain/messages';
 import { parseParsedProduct } from '../domain/messages';
 import type { ProductDraft } from '../domain/product';
-import {
-  parseXianyuFillResult,
-  type FillResult
-} from '../xianyu/fill';
+import { parseXianyuFillResult, type FillResult } from '../xianyu/fill';
 import { parseXianyuLoginCheckResult } from '../xianyu/login';
 import {
   sanitizeLogEntry,
@@ -51,8 +48,10 @@ function snapshotFromDraft(
     ...(draft.originalPrice === undefined ? {} : { originalPrice: draft.originalPrice }),
     shippingMethod: draft.shippingMethod,
     categoryNote: draft.categoryNote,
-    selectedImageCount: draft.images.filter((image) => image.selected).length,
-    ...(draft.video === undefined ? {} : { videoName: draft.video.fileName })
+    selectedImageCount: draft.images.length,
+    ...(draft.videos.length === 0
+      ? {}
+      : { videoName: draft.videos.map((video) => video.fileName).join('、') })
   };
 }
 
@@ -62,9 +61,9 @@ function draftFromMessage(message: RuntimeMessage): ProductDraft | undefined {
     : undefined;
 }
 
-function parseExpansion(value: unknown):
-  | { title: string; description: string; warnings: string[]; factWarnings: string[] }
-  | undefined {
+function parseExpansion(
+  value: unknown
+): { title: string; description: string; warnings: string[]; factWarnings: string[] } | undefined {
   if (
     !isRecord(value) ||
     typeof value.title !== 'string' ||
@@ -104,7 +103,10 @@ function fillDetails(value: unknown): OperationLogDetails {
   };
 }
 
-function buildSuccessDetails(message: RuntimeMessage, value: unknown): {
+function buildSuccessDetails(
+  message: RuntimeMessage,
+  value: unknown
+): {
   displayTitle?: string;
   details?: OperationLogDetails;
   message: string;
@@ -125,8 +127,10 @@ function buildSuccessDetails(message: RuntimeMessage, value: unknown): {
             title: product.title,
             description: product.description,
             ...(product.price === null ? {} : { price: product.price }),
-            ...(product.originalPrice === undefined ? {} : { originalPrice: product.originalPrice }),
-            selectedImageCount: product.images.filter((image) => image.selected).length
+            ...(product.originalPrice === undefined
+              ? {}
+              : { originalPrice: product.originalPrice }),
+            selectedImageCount: product.images.length
           },
           ...(product.warnings.length === 0 ? {} : { warnings: product.warnings }),
           result: '商品解析完成'

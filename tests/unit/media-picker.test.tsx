@@ -27,7 +27,6 @@ const remoteImage: ProductImage = {
     url: 'https://img.example.com/1.png',
     extractedBy: 'dom'
   },
-  selected: true,
   loadStatus: 'loaded'
 };
 
@@ -37,20 +36,221 @@ afterEach(() => {
 });
 
 describe('MediaPicker', () => {
-  it('支持批量图片选择且点击缩略图只打开预览', async () => {
-    const uploaded: string[][] = [];
-    const toggled: string[] = [];
+  it('上传图片期间显示上传中并禁用两个媒体入口', () => {
+    render(
+      <MediaPicker
+        images={[]}
+        videos={[]}
+        isUploadingImages
+        isUploadingVideos={false}
+        resolveLocalAsset={() => Promise.resolve(null)}
+        onUploadImages={() => undefined}
+        onUploadVideos={() => undefined}
+        onRemoveImage={() => undefined}
+        onRemoveVideo={() => undefined}
+        onLoadStatus={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: '上传中…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '上传视频' })).toBeDisabled();
+    expect(screen.getByLabelText('上传商品图片')).toBeDisabled();
+    expect(screen.getByLabelText('上传商品视频')).toBeDisabled();
+  });
+
+  it('不显示图片选中态并按全部媒体计数', () => {
     render(
       <MediaPicker
         images={[remoteImage]}
-        video={undefined}
-        selectedCount={1}
+        videos={[]}
+        isUploadingImages={false}
+        isUploadingVideos={false}
+        resolveLocalAsset={() => Promise.resolve(null)}
+        onUploadImages={() => undefined}
+        onUploadVideos={() => undefined}
+        onRemoveImage={() => undefined}
+        onRemoveVideo={() => undefined}
+        onLoadStatus={() => undefined}
+      />
+    );
+
+    expect(screen.getByText('媒体 1/9')).toBeVisible();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('视频文件选择器允许一次选择多个文件', () => {
+    render(
+      <MediaPicker
+        images={[]}
+        videos={[]}
+        isUploadingImages={false}
+        isUploadingVideos={false}
+        resolveLocalAsset={() => Promise.resolve(null)}
+        onUploadImages={() => undefined}
+        onUploadVideos={() => undefined}
+        onRemoveImage={() => undefined}
+        onRemoveVideo={() => undefined}
+        onLoadStatus={() => undefined}
+      />
+    );
+
+    expect(screen.getByLabelText('上传商品视频')).toHaveAttribute('multiple');
+  });
+
+  it('将本地上传图片显示为缩略图', async () => {
+    const createObjectURL = vi.fn(() => 'blob:local-thumbnail');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', { createObjectURL, revokeObjectURL });
+
+    render(
+      <MediaPicker
+        images={[
+          {
+            id: 'local-image',
+            location: {
+              kind: 'local',
+              assetId: 'asset-1',
+              fileName: 'local.png',
+              mimeType: 'image/png',
+              byteLength: 5
+            },
+            loadStatus: 'loaded'
+          }
+        ]}
+        resolveLocalAsset={() =>
+          Promise.resolve({
+            assetId: 'asset-1',
+            kind: 'image',
+            fileName: 'local.png',
+            mimeType: 'image/png',
+            byteLength: 5,
+            createdAt: '2026-08-31T13:00:00.000Z',
+            blob: new Blob(['local'], { type: 'image/png' })
+          })
+        }
+        onUploadImages={() => undefined}
+        onUploadVideos={() => undefined}
+        onRemoveImage={() => undefined}
+        onRemoveVideo={() => undefined}
+        onLoadStatus={() => undefined}
+      />
+    );
+
+    expect(await screen.findByRole('img', { name: '商品图片 1' })).toHaveAttribute(
+      'src',
+      'blob:local-thumbnail'
+    );
+  });
+
+  it('组件卸载时释放本地缩略图对象 URL', async () => {
+    const createObjectURL = vi.fn(() => 'blob:local-thumbnail');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', { createObjectURL, revokeObjectURL });
+
+    const view = render(
+      <MediaPicker
+        images={[
+          {
+            id: 'local-image',
+            location: {
+              kind: 'local',
+              assetId: 'asset-1',
+              fileName: 'local.png',
+              mimeType: 'image/png',
+              byteLength: 5
+            },
+            loadStatus: 'loaded'
+          }
+        ]}
+        resolveLocalAsset={() =>
+          Promise.resolve({
+            assetId: 'asset-1',
+            kind: 'image',
+            fileName: 'local.png',
+            mimeType: 'image/png',
+            byteLength: 5,
+            createdAt: '2026-08-31T13:00:00.000Z',
+            blob: new Blob(['local'], { type: 'image/png' })
+          })
+        }
+        onUploadImages={() => undefined}
+        onUploadVideos={() => undefined}
+        onRemoveImage={() => undefined}
+        onRemoveVideo={() => undefined}
+        onLoadStatus={() => undefined}
+      />
+    );
+
+    await screen.findByRole('img', { name: '商品图片 1' });
+    view.unmount();
+
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:local-thumbnail');
+  });
+
+  it('父组件重新渲染时复用本地缩略图对象 URL', async () => {
+    const createObjectURL = vi.fn(() => 'blob:local-thumbnail');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', { createObjectURL, revokeObjectURL });
+    const image: ProductImage = {
+      id: 'local-image',
+      location: {
+        kind: 'local',
+        assetId: 'asset-1',
+        fileName: 'local.png',
+        mimeType: 'image/png',
+        byteLength: 5
+      },
+      loadStatus: 'loaded'
+    };
+    const asset = {
+      assetId: 'asset-1',
+      kind: 'image' as const,
+      fileName: 'local.png',
+      mimeType: 'image/png',
+      byteLength: 5,
+      createdAt: '2026-08-31T13:00:00.000Z',
+      blob: new Blob(['local'], { type: 'image/png' })
+    };
+    const view = render(
+      <MediaPicker
+        images={[image]}
+        resolveLocalAsset={() => Promise.resolve(asset)}
+        onUploadImages={() => undefined}
+        onUploadVideos={() => undefined}
+        onRemoveImage={() => undefined}
+        onRemoveVideo={() => undefined}
+        onLoadStatus={() => undefined}
+      />
+    );
+    await screen.findByRole('img', { name: '商品图片 1' });
+
+    view.rerender(
+      <MediaPicker
+        images={[image]}
+        resolveLocalAsset={() => Promise.resolve(asset)}
+        onUploadImages={() => undefined}
+        onUploadVideos={() => undefined}
+        onRemoveImage={() => undefined}
+        onRemoveVideo={() => undefined}
+        onLoadStatus={() => undefined}
+      />
+    );
+
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('支持批量图片选择且点击缩略图只打开预览', async () => {
+    const uploaded: string[][] = [];
+    render(
+      <MediaPicker
+        images={[remoteImage]}
+        videos={[]}
         resolveLocalAsset={() => Promise.resolve(null)}
         onUploadImages={(files) => {
           uploaded.push(files.map((file) => file.name));
         }}
-        onUploadVideo={() => undefined}
-        onToggle={(id) => toggled.push(id)}
+        onUploadVideos={() => undefined}
         onRemoveImage={() => undefined}
         onRemoveVideo={() => undefined}
         onLoadStatus={() => undefined}
@@ -72,7 +272,6 @@ describe('MediaPicker', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '预览商品图片 1' }));
     expect(await screen.findByRole('dialog', { name: '媒体预览' })).toBeVisible();
-    expect(toggled).toEqual([]);
     expect(screen.getByRole('button', { name: '关闭媒体预览' })).toHaveFocus();
 
     fireEvent.keyDown(screen.getByRole('button', { name: '关闭媒体预览' }), { key: 'Tab' });
@@ -99,7 +298,10 @@ describe('MediaPicker', () => {
   });
 
   it('关闭本地图片预览时释放对象 URL', async () => {
-    const createObjectURL = vi.fn(() => 'blob:local-preview');
+    const createObjectURL = vi
+      .fn()
+      .mockReturnValueOnce('blob:local-thumbnail')
+      .mockReturnValueOnce('blob:local-preview');
     const revokeObjectURL = vi.fn();
     vi.stubGlobal('URL', { createObjectURL, revokeObjectURL });
 
@@ -115,12 +317,10 @@ describe('MediaPicker', () => {
               mimeType: 'image/png',
               byteLength: 5
             },
-            selected: true,
             loadStatus: 'loaded'
           }
         ]}
-        video={undefined}
-        selectedCount={1}
+        videos={[]}
         resolveLocalAsset={() =>
           Promise.resolve({
             assetId: 'asset-1',
@@ -133,16 +333,16 @@ describe('MediaPicker', () => {
           })
         }
         onUploadImages={() => undefined}
-        onUploadVideo={() => undefined}
-        onToggle={() => undefined}
+        onUploadVideos={() => undefined}
         onRemoveImage={() => undefined}
         onRemoveVideo={() => undefined}
         onLoadStatus={() => undefined}
       />
     );
 
+    await screen.findByRole('img', { name: '商品图片 1' });
     fireEvent.click(screen.getByRole('button', { name: '预览商品图片 1' }));
-    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole('button', { name: '关闭媒体预览' }));
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:local-preview');
     expect(revokeObjectURL).toHaveBeenCalledTimes(1);
@@ -162,21 +362,20 @@ describe('MediaPicker', () => {
               mimeType: 'image/png',
               byteLength: 5
             },
-            selected: true,
             loadStatus: 'loaded'
           }
         ]}
-        selectedCount={1}
         resolveLocalAsset={() => Promise.reject(new Error('读取失败'))}
         onUploadImages={() => undefined}
-        onUploadVideo={() => undefined}
-        onToggle={() => undefined}
+        onUploadVideos={() => undefined}
         onRemoveImage={() => undefined}
         onRemoveVideo={() => undefined}
         onLoadStatus={(_id, status) => statuses.push(status)}
       />
     );
 
+    await screen.findByText('加载失败');
+    statuses.length = 0;
     fireEvent.click(screen.getByRole('button', { name: '预览商品图片 1' }));
 
     expect(await screen.findByText('无法读取本地图片，请重试')).toBeVisible();
@@ -198,21 +397,20 @@ describe('MediaPicker', () => {
               mimeType: 'image/png',
               byteLength: 5
             },
-            selected: true,
             loadStatus: 'loaded'
           }
         ]}
-        selectedCount={1}
         resolveLocalAsset={() => Promise.resolve(null)}
         onUploadImages={() => undefined}
-        onUploadVideo={() => undefined}
-        onToggle={() => undefined}
+        onUploadVideos={() => undefined}
         onRemoveImage={() => undefined}
         onRemoveVideo={() => undefined}
         onLoadStatus={(_id, status) => statuses.push(status)}
       />
     );
 
+    await screen.findByText('加载失败');
+    statuses.length = 0;
     fireEvent.click(screen.getByRole('button', { name: '预览商品图片 1' }));
 
     expect(await screen.findByText('无法读取本地图片，请重试')).toBeVisible();
@@ -234,7 +432,7 @@ describe('MediaPicker', () => {
     const revokeObjectURL = vi.fn();
     vi.stubGlobal('URL', { createObjectURL, revokeObjectURL });
 
-    render(
+    const view = render(
       <MediaPicker
         images={[
           {
@@ -246,15 +444,12 @@ describe('MediaPicker', () => {
               mimeType: 'image/png',
               byteLength: 5
             },
-            selected: true,
             loadStatus: 'loaded'
           }
         ]}
-        selectedCount={1}
         resolveLocalAsset={() => asset.promise}
         onUploadImages={() => undefined}
-        onUploadVideo={() => undefined}
-        onToggle={() => undefined}
+        onUploadVideos={() => undefined}
         onRemoveImage={() => undefined}
         onRemoveVideo={() => undefined}
         onLoadStatus={() => undefined}
@@ -263,6 +458,17 @@ describe('MediaPicker', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '预览商品图片 1' }));
     fireEvent.click(screen.getByRole('button', { name: '删除商品图片 1' }));
+    view.rerender(
+      <MediaPicker
+        images={[]}
+        resolveLocalAsset={() => asset.promise}
+        onUploadImages={() => undefined}
+        onUploadVideos={() => undefined}
+        onRemoveImage={() => undefined}
+        onRemoveVideo={() => undefined}
+        onLoadStatus={() => undefined}
+      />
+    );
     asset.resolve({
       assetId: 'asset-1',
       kind: 'image',
@@ -285,14 +491,15 @@ describe('MediaPicker', () => {
     render(
       <MediaPicker
         images={[]}
-        video={{
-          id: 'local-video',
-          assetId: 'asset-video',
-          fileName: 'demo.mp4',
-          mimeType: 'video/mp4',
-          byteLength: 5
-        }}
-        selectedCount={0}
+        videos={[
+          {
+            id: 'local-video',
+            assetId: 'asset-video',
+            fileName: 'demo.mp4',
+            mimeType: 'video/mp4',
+            byteLength: 5
+          }
+        ]}
         resolveLocalAsset={() =>
           Promise.resolve({
             assetId: 'asset-video',
@@ -305,15 +512,14 @@ describe('MediaPicker', () => {
           })
         }
         onUploadImages={() => undefined}
-        onUploadVideo={() => undefined}
-        onToggle={() => undefined}
+        onUploadVideos={() => undefined}
         onRemoveImage={() => undefined}
         onRemoveVideo={() => undefined}
         onLoadStatus={() => undefined}
       />
     );
 
-    const trigger = screen.getByRole('button', { name: '预览商品视频' });
+    const trigger = screen.getByRole('button', { name: '预览商品视频 1' });
     fireEvent.click(trigger);
     const video = await screen.findByLabelText('demo.mp4');
     const closeButton = screen.getByRole('button', { name: '关闭媒体预览' });

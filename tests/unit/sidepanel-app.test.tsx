@@ -36,10 +36,10 @@ const readyDraft: ProductDraft = {
         url: 'https://img.example.com/ready.jpg',
         extractedBy: 'dom'
       },
-      selected: true,
       loadStatus: 'loaded'
     }
   ],
+  videos: [],
   warnings: [],
   confidence: 'high',
   shippingMethod: '包邮',
@@ -98,6 +98,102 @@ function createServices(overrides: Partial<SidePanelServices> = {}): SidePanelSe
 }
 
 describe('App', () => {
+  it('无图片和视频的完整草稿也允许填入闲鱼', async () => {
+    let submittedDraft: ProductDraft | null = null;
+    render(
+      <App
+        services={createServices({
+          checkXianyuLogin: () => Promise.resolve({ state: 'logged-in', message: '闲鱼已登录' }),
+          fillDraft: (draft) => {
+            submittedDraft = draft;
+            return Promise.resolve({
+              filled: ['title', 'price', 'description'],
+              skipped: [],
+              warnings: []
+            });
+          }
+        })}
+      />
+    );
+
+    await screen.findAllByText('闲鱼已登录');
+    fireEvent.click(screen.getByRole('button', { name: '手动填写' }));
+    fireEvent.change(await screen.findByLabelText('商品标题'), { target: { value: '无媒体商品' } });
+    fireEvent.change(screen.getByLabelText('售价'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('商品描述'), { target: { value: '仅填写文本' } });
+
+    const fillButton = screen.getByRole('button', { name: '填入闲鱼' });
+    expect(fillButton).toBeEnabled();
+    fireEvent.click(fillButton);
+
+    await waitFor(() => expect(submittedDraft).not.toBeNull());
+    expect(submittedDraft).toMatchObject({ images: [], videos: [] });
+  });
+
+  it('一次上传多个视频并可分别删除', async () => {
+    const deleted: string[] = [];
+    render(
+      <App
+        services={createServices({
+          deleteMedia: (assetId) => {
+            deleted.push(assetId);
+            return Promise.resolve();
+          }
+        })}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '手动填写' }));
+    fireEvent.change(screen.getByLabelText('上传商品视频'), {
+      target: {
+        files: [
+          new File(['one'], 'one.mp4', { type: 'video/mp4' }),
+          new File(['two'], 'two.mov', { type: 'video/quicktime' })
+        ]
+      }
+    });
+
+    expect(await screen.findByText('媒体 2/9')).toBeVisible();
+    expect(screen.getByText(/one\.mp4/u)).toBeVisible();
+    expect(screen.getByText(/two\.mov/u)).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: '删除商品视频 1' }));
+    await waitFor(() => expect(deleted).toContain('asset-one.mp4'));
+    expect(await screen.findByText('媒体 1/9')).toBeVisible();
+    expect(screen.queryByText(/one\.mp4/u)).toBeNull();
+    expect(screen.getByText(/two\.mov/u)).toBeVisible();
+  });
+
+  it('图片保存期间显示上传中并在完成后恢复按钮', async () => {
+    const save = createDeferred<StoredMediaMetadata>();
+    render(
+      <App
+        services={createServices({
+          saveMedia: () => save.promise
+        })}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '手动填写' }));
+    fireEvent.change(screen.getByLabelText('上传商品图片'), {
+      target: { files: [new File(['image'], 'demo.png', { type: 'image/png' })] }
+    });
+
+    expect(await screen.findByRole('button', { name: '上传中…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '上传视频' })).toBeDisabled();
+
+    save.resolve({
+      assetId: 'asset-demo',
+      kind: 'image',
+      fileName: 'demo.png',
+      mimeType: 'image/png',
+      byteLength: 5,
+      createdAt: '2026-09-01T10:00:00.000Z'
+    });
+
+    expect(await screen.findByRole('button', { name: '上传图片' })).toBeEnabled();
+  });
+
   it('点击刷新时显示加载并立即采用最新登录状态', async () => {
     const checks: Promise<XianyuLoginCheckResult>[] = [
       Promise.resolve({ state: 'unknown', message: '尚未确认' }),
@@ -200,7 +296,9 @@ describe('App', () => {
     });
     render(<App services={services} />);
 
-    expect(await screen.findByText('检查闲鱼登录状态失败：扩展后台返回了无法识别的登录状态')).toBeVisible();
+    expect(
+      await screen.findByText('检查闲鱼登录状态失败：扩展后台返回了无法识别的登录状态')
+    ).toBeVisible();
     expect(screen.getByText('尚未确认闲鱼登录状态')).toBeVisible();
   });
 
@@ -209,7 +307,10 @@ describe('App', () => {
       <App
         services={createServices({
           checkXianyuLogin: () =>
-            Promise.resolve({ state: 'logged-out', message: '请先完成闲鱼网页登录，草稿会保留在本地。' })
+            Promise.resolve({
+              state: 'logged-out',
+              message: '请先完成闲鱼网页登录，草稿会保留在本地。'
+            })
         })}
       />
     );
@@ -422,12 +523,12 @@ describe('App', () => {
       byteLength: 5,
       createdAt: '2026-08-31T14:00:00.000Z'
     });
-    expect(await screen.findByText('late.png')).toBeVisible();
+    expect(await screen.findByText('媒体 1/9')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: '确认返回' }));
 
     expect(await screen.findByText('草稿已更新，请重新确认返回')).toBeVisible();
     expect(cleared).toBe(0);
-    expect(screen.getByText('late.png')).toBeVisible();
+    expect(screen.getByText('媒体 1/9')).toBeVisible();
   });
 
   it('清除草稿等待期间丢弃迟到媒体并补偿删除 Blob', async () => {
@@ -618,6 +719,7 @@ describe('App', () => {
       price: 20,
       currency: 'CNY',
       images: [],
+      videos: [],
       warnings: [],
       confidence: 'low' as const,
       shippingMethod: '包邮',
@@ -630,7 +732,7 @@ describe('App', () => {
     expect(screen.getByText('已恢复本地草稿')).toBeVisible();
   });
 
-  it('所有已选择图片加载完成前保持填表按钮禁用', async () => {
+  it('草稿中的图片全部加载完成前保持填表按钮禁用', async () => {
     const storedDraft = {
       id: 'stored-images',
       platform: 'taobao' as const,
@@ -653,7 +755,6 @@ describe('App', () => {
             url: 'https://img.example.com/loaded.jpg',
             extractedBy: 'dom' as const
           },
-          selected: true,
           loadStatus: 'loaded' as const
         },
         {
@@ -663,10 +764,10 @@ describe('App', () => {
             url: 'https://img.example.com/pending.jpg',
             extractedBy: 'dom' as const
           },
-          selected: true,
           loadStatus: 'idle' as const
         }
       ],
+      videos: [],
       warnings: [],
       confidence: 'high' as const,
       shippingMethod: '包邮',
@@ -724,7 +825,7 @@ describe('App', () => {
     expect(calls).toBeGreaterThanOrEqual(2);
   });
 
-  it('无 MIME 的 MOV 视频按校验后的 MIME 保存并替换旧视频', async () => {
+  it('无 MIME 的 MOV 视频按校验后的 MIME 保存并追加到旧视频', async () => {
     const savedMimeTypes: string[] = [];
     const deleted: string[] = [];
     const storedDraft = {
@@ -737,13 +838,15 @@ describe('App', () => {
       price: null,
       currency: 'CNY',
       images: [],
-      video: {
-        id: 'local-old-video',
-        assetId: 'asset-old-video',
-        fileName: 'old.mp4',
-        mimeType: 'video/mp4' as const,
-        byteLength: 3
-      },
+      videos: [
+        {
+          id: 'local-old-video',
+          assetId: 'asset-old-video',
+          fileName: 'old.mp4',
+          mimeType: 'video/mp4' as const,
+          byteLength: 3
+        }
+      ],
       warnings: [],
       confidence: 'low' as const,
       shippingMethod: '包邮',
@@ -780,82 +883,7 @@ describe('App', () => {
 
     await waitFor(() => expect(savedMimeTypes).toEqual(['video/quicktime']));
     expect(await screen.findByText(/NEW.MOV/)).toBeVisible();
-    expect(deleted).toContain('asset-old-video');
-  });
-
-  it('图片保存期间名额变满时删除已保存但不能加入的资产', async () => {
-    const save = createDeferred<{
-      assetId: string;
-      kind: 'image';
-      fileName: string;
-      mimeType: string;
-      byteLength: number;
-      createdAt: string;
-    }>();
-    const deleted: string[] = [];
-    const storedDraft = {
-      id: 'stored-images',
-      platform: 'generic' as const,
-      canonicalUrl: '',
-      source: { title: '', description: '', price: null, currency: 'CNY' },
-      title: '',
-      description: '',
-      price: null,
-      currency: 'CNY',
-      images: Array.from({ length: 8 }, (_, index) => ({
-        id: `selected-${String(index)}`,
-        location: {
-          kind: 'remote' as const,
-          url: `https://img.example.com/${String(index)}.jpg`,
-          extractedBy: 'dom' as const
-        },
-        selected: true,
-        loadStatus: 'loaded' as const
-      })).concat({
-        id: 'last-slot',
-        location: {
-          kind: 'remote' as const,
-          url: 'https://img.example.com/last.jpg',
-          extractedBy: 'dom' as const
-        },
-        selected: false,
-        loadStatus: 'loaded' as const
-      }),
-      warnings: [],
-      confidence: 'low' as const,
-      shippingMethod: '包邮',
-      categoryNote: '',
-      updatedAt: '2026-08-31T12:00:00.000Z'
-    };
-    render(
-      <App
-        services={createServices({
-          loadDraft: () => Promise.resolve(storedDraft),
-          saveMedia: () => save.promise,
-          deleteMedia: (assetId) => {
-            deleted.push(assetId);
-            return Promise.resolve();
-          }
-        })}
-      />
-    );
-
-    await screen.findByRole('checkbox', { name: '选择商品图片 9' });
-    fireEvent.change(screen.getByLabelText('上传商品图片'), {
-      target: { files: [new File(['image'], 'new.png', { type: 'image/png' })] }
-    });
-    fireEvent.click(screen.getByRole('checkbox', { name: '选择商品图片 9' }));
-    save.resolve({
-      assetId: 'asset-late-image',
-      kind: 'image',
-      fileName: 'new.png',
-      mimeType: 'image/png',
-      byteLength: 5,
-      createdAt: '2026-08-31T13:00:00.000Z'
-    });
-
-    await waitFor(() => expect(deleted).toContain('asset-late-image'));
-    expect(screen.queryByText('new.png')).toBeNull();
+    expect(deleted).not.toContain('asset-old-video');
   });
 
   it('草稿切换后删除迟到图片保存产生的资产', async () => {
@@ -884,7 +912,9 @@ describe('App', () => {
     fireEvent.change(screen.getByLabelText('上传商品图片'), {
       target: { files: [new File(['image'], 'late.png', { type: 'image/png' })] }
     });
-    fireEvent.change(screen.getByLabelText('商品链接'), { target: { value: parsedProduct.canonicalUrl } });
+    fireEvent.change(screen.getByLabelText('商品链接'), {
+      target: { value: parsedProduct.canonicalUrl }
+    });
     fireEvent.click(screen.getByRole('button', { name: '解析商品' }));
     expect(await screen.findByDisplayValue('测试商品')).toBeVisible();
 
@@ -920,11 +950,13 @@ describe('App', () => {
     });
 
     await waitFor(() =>
-      expect(cleanupReferences.some((assetIds) => assetIds.includes('asset-persisted.png'))).toBe(true)
+      expect(cleanupReferences.some((assetIds) => assetIds.includes('asset-persisted.png'))).toBe(
+        true
+      )
     );
   });
 
-  it('两次视频替换乱序完成时只保留最后选择的视频', async () => {
+  it('两次视频上传乱序完成时丢弃已失效请求的文件', async () => {
     const first = createDeferred<{
       assetId: string;
       kind: 'video';
@@ -963,8 +995,12 @@ describe('App', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '手动填写' }));
     const input = screen.getByLabelText('上传商品视频');
-    fireEvent.change(input, { target: { files: [new File(['one'], 'first.mp4', { type: 'video/mp4' })] } });
-    fireEvent.change(input, { target: { files: [new File(['two'], 'second.mp4', { type: 'video/mp4' })] } });
+    fireEvent.change(input, {
+      target: { files: [new File(['one'], 'first.mp4', { type: 'video/mp4' })] }
+    });
+    fireEvent.change(input, {
+      target: { files: [new File(['two'], 'second.mp4', { type: 'video/mp4' })] }
+    });
     second.resolve({
       assetId: 'asset-second',
       kind: 'video',

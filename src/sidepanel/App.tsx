@@ -7,7 +7,7 @@ import type { AiSettings } from '../domain/settings';
 import {
   validateImageBatch,
   validateVideo,
-  MAX_SELECTED_IMAGES,
+  MAX_MEDIA_COUNT,
   MAX_TOTAL_IMAGE_BYTES
 } from '../media/validation';
 import type {
@@ -17,10 +17,7 @@ import type {
 } from '../storage/media-store';
 import type { OperationLogEntry } from '../storage/operation-log';
 import type { FillResult } from '../xianyu/fill';
-import {
-  parseXianyuLoginCheckResult,
-  type XianyuLoginCheckResult
-} from '../xianyu/login';
+import { parseXianyuLoginCheckResult, type XianyuLoginCheckResult } from '../xianyu/login';
 import { AiSettingsForm } from './components/AiSettingsForm';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { LoginBanner } from './components/LoginBanner';
@@ -95,6 +92,8 @@ export function App({ services }: { services: SidePanelServices }) {
   const [panelSide, setPanelSide] = useState<PanelSide>('unknown');
   const [resetConfirmation, setResetConfirmation] = useState<ResetConfirmation | null>(null);
   const [isResetting, setIsResetting] = useState(false);
+  const [isUploadingImages, setIsUploadingImages] = useState(false);
+  const [isUploadingVideos, setIsUploadingVideos] = useState(false);
   const draftSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const latestDraftRef = useRef<ProductDraft | null>(null);
   const sourceInputRef = useRef<HTMLInputElement>(null);
@@ -108,32 +107,35 @@ export function App({ services }: { services: SidePanelServices }) {
   const loginCheckRequestRef = useRef(0);
   const pendingMediaAssetIdsRef = useRef(new Set<string>());
 
-  const checkXianyuLogin = useCallback(async (isRefreshRequest: boolean): Promise<void> => {
-    const requestToken = loginCheckRequestRef.current + 1;
-    loginCheckRequestRef.current = requestToken;
-    setIsLoginRefreshing(isRefreshRequest);
-    try {
-      const result = parseXianyuLoginCheckResult(await services.checkXianyuLogin());
-      if (result === null) {
-        throw new Error('扩展后台返回了无法识别的登录状态');
+  const checkXianyuLogin = useCallback(
+    async (isRefreshRequest: boolean): Promise<void> => {
+      const requestToken = loginCheckRequestRef.current + 1;
+      loginCheckRequestRef.current = requestToken;
+      setIsLoginRefreshing(isRefreshRequest);
+      try {
+        const result = parseXianyuLoginCheckResult(await services.checkXianyuLogin());
+        if (result === null) {
+          throw new Error('扩展后台返回了无法识别的登录状态');
+        }
+        if (loginCheckRequestRef.current !== requestToken) {
+          return;
+        }
+        dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: result.state });
+        setLoginMessage(result.message);
+      } catch (error) {
+        if (loginCheckRequestRef.current !== requestToken) {
+          return;
+        }
+        dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: 'unknown' });
+        setLoginMessage(`检查闲鱼登录状态失败：${errorMessage(error)}`);
+      } finally {
+        if (loginCheckRequestRef.current === requestToken) {
+          setIsLoginRefreshing(false);
+        }
       }
-      if (loginCheckRequestRef.current !== requestToken) {
-        return;
-      }
-      dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: result.state });
-      setLoginMessage(result.message);
-    } catch (error) {
-      if (loginCheckRequestRef.current !== requestToken) {
-        return;
-      }
-      dispatch({ type: 'LOGIN_STATE_CHANGED', loginState: 'unknown' });
-      setLoginMessage(`检查闲鱼登录状态失败：${errorMessage(error)}`);
-    } finally {
-      if (loginCheckRequestRef.current === requestToken) {
-        setIsLoginRefreshing(false);
-      }
-    }
-  }, [services]);
+    },
+    [services]
+  );
 
   useEffect(() => {
     latestDraftRef.current = state.draft;
@@ -236,6 +238,8 @@ export function App({ services }: { services: SidePanelServices }) {
   const parseProduct = async () => {
     imageUploadRequestRef.current += 1;
     videoUploadRequestRef.current += 1;
+    setIsUploadingImages(false);
+    setIsUploadingVideos(false);
     const id = operationId();
     const workflowGeneration = workflowGenerationRef.current;
     dispatch({ type: 'PARSE_STARTED', operationId: id, url: state.sourceUrl });
@@ -354,9 +358,7 @@ export function App({ services }: { services: SidePanelServices }) {
 
   const isResetConfirmationCurrent = (confirmation: ResetConfirmation): boolean => {
     const draft = latestDraftRef.current;
-    return (
-      draft?.id === confirmation.draftId && draft.updatedAt === confirmation.draftUpdatedAt
-    );
+    return draft?.id === confirmation.draftId && draft.updatedAt === confirmation.draftUpdatedAt;
   };
 
   const closeResetConfirmation = () => {
@@ -382,6 +384,8 @@ export function App({ services }: { services: SidePanelServices }) {
     initializationGenerationRef.current += 1;
     imageUploadRequestRef.current += 1;
     videoUploadRequestRef.current += 1;
+    setIsUploadingImages(false);
+    setIsUploadingVideos(false);
     setIsResetting(true);
     try {
       await draftSaveQueue.current;
@@ -435,118 +439,165 @@ export function App({ services }: { services: SidePanelServices }) {
     const draftId = state.draft.id;
     const requestToken = imageUploadRequestRef.current + 1;
     imageUploadRequestRef.current = requestToken;
-    const selectedCount = state.draft.images.filter((image) => image.selected).length;
-    const validation = validateImageBatch(files, MAX_SELECTED_IMAGES - selectedCount);
-    const rejected = [...validation.rejected];
-    const savedImages: ProductDraft['images'] = [];
-    for (const file of validation.accepted) {
-      if (!isImageUploadCurrent(draftId, requestToken, latestDraftRef, imageUploadRequestRef)) {
-        break;
-      }
-      const currentDraft = latestDraftRef.current;
-      if (currentDraft === null || !hasImageCapacity(currentDraft, savedImages, file.size)) {
-        rejected.push({ fileName: file.name, reason: imageCapacityReason(currentDraft, savedImages, file.size) });
-        continue;
-      }
-      try {
-        const stored = await services.saveMedia(file, 'image');
-        pendingMediaAssetIdsRef.current.add(stored.assetId);
-        const latestDraft = latestDraftRef.current;
-        if (
-          !isImageUploadCurrent(draftId, requestToken, latestDraftRef, imageUploadRequestRef) ||
-          latestDraft === null ||
-          !hasImageCapacity(latestDraft, savedImages, stored.byteLength) ||
-          !isImageMimeType(stored.mimeType)
-        ) {
-          await discardMedia(services, stored.assetId, pendingMediaAssetIdsRef.current);
-          if (latestDraft !== null && !hasImageCapacity(latestDraft, savedImages, stored.byteLength)) {
-            rejected.push({
-              fileName: file.name,
-              reason: imageCapacityReason(latestDraft, savedImages, stored.byteLength)
-            });
-          }
-          if (!isImageMimeType(stored.mimeType)) {
-            rejected.push({ fileName: file.name, reason: '仅支持 JPEG、PNG、WebP 图片' });
-          }
+    setIsUploadingImages(true);
+    try {
+      const remainingSlots =
+        MAX_MEDIA_COUNT - state.draft.images.length - state.draft.videos.length;
+      const validation = validateImageBatch(files, remainingSlots);
+      const rejected = [...validation.rejected];
+      const savedImages: ProductDraft['images'] = [];
+      for (const file of validation.accepted) {
+        if (!isImageUploadCurrent(draftId, requestToken, latestDraftRef, imageUploadRequestRef)) {
+          break;
+        }
+        const currentDraft = latestDraftRef.current;
+        if (currentDraft === null || !hasImageCapacity(currentDraft, savedImages, file.size)) {
+          rejected.push({
+            fileName: file.name,
+            reason: imageCapacityReason(currentDraft, savedImages, file.size)
+          });
           continue;
         }
-        savedImages.push({
-          id: `local-${stored.assetId}`,
-          location: {
-            kind: 'local',
-            assetId: stored.assetId,
-            fileName: stored.fileName,
-            mimeType: stored.mimeType,
-            byteLength: stored.byteLength
-          },
-          selected: true,
-          loadStatus: 'loaded'
-        });
-      } catch {
-        rejected.push({ fileName: file.name, reason: '本地媒体保存失败' });
+        try {
+          const stored = await services.saveMedia(file, 'image');
+          pendingMediaAssetIdsRef.current.add(stored.assetId);
+          const latestDraft = latestDraftRef.current;
+          if (
+            !isImageUploadCurrent(draftId, requestToken, latestDraftRef, imageUploadRequestRef) ||
+            latestDraft === null ||
+            !hasImageCapacity(latestDraft, savedImages, stored.byteLength) ||
+            !isImageMimeType(stored.mimeType)
+          ) {
+            await discardMedia(services, stored.assetId, pendingMediaAssetIdsRef.current);
+            if (
+              latestDraft !== null &&
+              !hasImageCapacity(latestDraft, savedImages, stored.byteLength)
+            ) {
+              rejected.push({
+                fileName: file.name,
+                reason: imageCapacityReason(latestDraft, savedImages, stored.byteLength)
+              });
+            }
+            if (!isImageMimeType(stored.mimeType)) {
+              rejected.push({ fileName: file.name, reason: '仅支持 JPEG、PNG、WebP 图片' });
+            }
+            continue;
+          }
+          savedImages.push({
+            id: `local-${stored.assetId}`,
+            location: {
+              kind: 'local',
+              assetId: stored.assetId,
+              fileName: stored.fileName,
+              mimeType: stored.mimeType,
+              byteLength: stored.byteLength
+            },
+            loadStatus: 'loaded'
+          });
+        } catch {
+          rejected.push({ fileName: file.name, reason: '本地媒体保存失败' });
+        }
+      }
+
+      if (!isImageUploadCurrent(draftId, requestToken, latestDraftRef, imageUploadRequestRef)) {
+        return;
+      }
+      const notice = rejected.length === 0 ? undefined : formatRejectedFiles(rejected);
+      dispatch({
+        type: 'LOCAL_IMAGES_ADDED',
+        draftId,
+        images: savedImages,
+        now: new Date().toISOString(),
+        ...(notice === undefined ? {} : { notice })
+      });
+    } finally {
+      if (imageUploadRequestRef.current === requestToken) {
+        setIsUploadingImages(false);
       }
     }
-
-    if (!isImageUploadCurrent(draftId, requestToken, latestDraftRef, imageUploadRequestRef)) {
-      return;
-    }
-    const notice = rejected.length === 0 ? undefined : formatRejectedFiles(rejected);
-    dispatch({
-      type: 'LOCAL_IMAGES_ADDED',
-      draftId,
-      images: savedImages,
-      now: new Date().toISOString(),
-      ...(notice === undefined ? {} : { notice })
-    });
   };
 
-  const uploadVideo = async (file: File) => {
-    if (state.draft === null) {
+  const uploadVideos = async (files: readonly File[]) => {
+    if (state.draft === null || files.length === 0) {
       return;
     }
     const draftId = state.draft.id;
     const requestToken = videoUploadRequestRef.current + 1;
     videoUploadRequestRef.current = requestToken;
-    const validation = validateVideo(file);
-    if (!validation.ok) {
-      dispatch({ type: 'OPERATION_FAILED', message: validation.reason });
-      return;
-    }
+    setIsUploadingVideos(true);
     try {
-      const normalizedFile = createValidatedVideoFile(file, validation.mimeType);
-      const previousVideo = state.draft.video;
-      const stored = await services.saveMedia(normalizedFile, 'video');
-      pendingMediaAssetIdsRef.current.add(stored.assetId);
-      if (!isVideoUploadCurrent(draftId, requestToken, latestDraftRef, videoUploadRequestRef)) {
-        await discardMedia(services, stored.assetId, pendingMediaAssetIdsRef.current);
-        return;
-      }
-      if (!isVideoMimeType(stored.mimeType)) {
-        await discardMedia(services, stored.assetId, pendingMediaAssetIdsRef.current);
-        throw new Error('仅支持 MP4、MOV 视频');
-      }
-      dispatch({
-        type: 'VIDEO_REPLACED',
-        draftId,
-        video: {
-          id: `local-${stored.assetId}`,
-          assetId: stored.assetId,
-          fileName: stored.fileName,
-          mimeType: stored.mimeType,
-          byteLength: stored.byteLength
-        },
-        now: new Date().toISOString()
-      });
-      if (previousVideo !== undefined) {
+      const rejected: { fileName: string; reason: string }[] = [];
+      const savedVideos: ProductDraft['videos'] = [];
+      for (const file of files) {
+        if (!isVideoUploadCurrent(draftId, requestToken, latestDraftRef, videoUploadRequestRef)) {
+          break;
+        }
+        const currentDraft = latestDraftRef.current;
+        if (
+          currentDraft === null ||
+          currentDraft.images.length + currentDraft.videos.length + savedVideos.length >=
+            MAX_MEDIA_COUNT
+        ) {
+          rejected.push({
+            fileName: file.name,
+            reason: `图片和视频合计最多只能添加 ${String(MAX_MEDIA_COUNT)} 个`
+          });
+          continue;
+        }
+        const validation = validateVideo(file);
+        if (!validation.ok) {
+          rejected.push({ fileName: file.name, reason: validation.reason });
+          continue;
+        }
         try {
-          await services.deleteMedia(previousVideo.assetId);
-          pendingMediaAssetIdsRef.current.delete(previousVideo.assetId);
+          const normalizedFile = createValidatedVideoFile(file, validation.mimeType);
+          const stored = await services.saveMedia(normalizedFile, 'video');
+          pendingMediaAssetIdsRef.current.add(stored.assetId);
+          const latestDraft = latestDraftRef.current;
+          if (
+            !isVideoUploadCurrent(draftId, requestToken, latestDraftRef, videoUploadRequestRef) ||
+            latestDraft === null ||
+            latestDraft.images.length + latestDraft.videos.length + savedVideos.length >=
+              MAX_MEDIA_COUNT ||
+            !isVideoMimeType(stored.mimeType)
+          ) {
+            await discardMedia(services, stored.assetId, pendingMediaAssetIdsRef.current);
+            if (!isVideoMimeType(stored.mimeType)) {
+              rejected.push({ fileName: file.name, reason: '仅支持 MP4、MOV 视频' });
+            } else if (latestDraft !== null) {
+              rejected.push({
+                fileName: file.name,
+                reason: `图片和视频合计最多只能添加 ${String(MAX_MEDIA_COUNT)} 个`
+              });
+            }
+            continue;
+          }
+          savedVideos.push({
+            id: `local-${stored.assetId}`,
+            assetId: stored.assetId,
+            fileName: stored.fileName,
+            mimeType: stored.mimeType,
+            byteLength: stored.byteLength
+          });
         } catch {
-          // The new video is safely referenced; initialization cleanup will retry the old Blob.
+          rejected.push({ fileName: file.name, reason: '本地媒体保存失败' });
         }
       }
-    } catch (error) {
-      dispatch({ type: 'OPERATION_FAILED', message: errorMessage(error) });
+      if (!isVideoUploadCurrent(draftId, requestToken, latestDraftRef, videoUploadRequestRef)) {
+        return;
+      }
+      const notice = rejected.length === 0 ? undefined : formatRejectedFiles(rejected);
+      dispatch({
+        type: 'VIDEOS_ADDED',
+        draftId,
+        videos: savedVideos,
+        now: new Date().toISOString(),
+        ...(notice === undefined ? {} : { notice })
+      });
+    } finally {
+      if (videoUploadRequestRef.current === requestToken) {
+        setIsUploadingVideos(false);
+      }
     }
   };
 
@@ -566,15 +617,15 @@ export function App({ services }: { services: SidePanelServices }) {
     }
   };
 
-  const removeVideo = async () => {
-    const video = state.draft?.video;
+  const removeVideo = async (id: string) => {
+    const video = state.draft?.videos.find((candidate) => candidate.id === id);
     if (video === undefined) {
       return;
     }
     try {
       await services.deleteMedia(video.assetId);
       pendingMediaAssetIdsRef.current.delete(video.assetId);
-      dispatch({ type: 'VIDEO_REMOVED', now: new Date().toISOString() });
+      dispatch({ type: 'VIDEO_REMOVED', id, now: new Date().toISOString() });
     } catch (error) {
       dispatch({ type: 'OPERATION_FAILED', message: `视频删除失败：${errorMessage(error)}` });
     }
@@ -582,7 +633,6 @@ export function App({ services }: { services: SidePanelServices }) {
 
   const isBusy =
     state.phase === 'parsing' || state.phase === 'expanding' || state.phase === 'filling';
-  const selectedImages = state.draft?.images.filter((image) => image.selected) ?? [];
   const draftReadyToFill =
     state.draft !== null &&
     state.draft.title.trim().length > 0 &&
@@ -592,8 +642,7 @@ export function App({ services }: { services: SidePanelServices }) {
     state.draft.price > 0 &&
     (state.draft.originalPrice === undefined ||
       (Number.isFinite(state.draft.originalPrice) && state.draft.originalPrice > 0)) &&
-    selectedImages.length > 0 &&
-    selectedImages.every((image) => image.loadStatus === 'loaded');
+    state.draft.images.every((image) => image.loadStatus === 'loaded');
   const fillDisabled = !draftReadyToFill || isBusy || state.loginState === 'logged-out';
   const expansionDisabled =
     state.draft === null ||
@@ -603,154 +652,158 @@ export function App({ services }: { services: SidePanelServices }) {
   return (
     <div className="app-shell">
       <div inert={resetConfirmation !== null}>
-      <header className="app-header">
-        <div className="brand-mark" aria-hidden="true">
-          闲
-        </div>
-        <div className="brand-copy">
-          <strong>闲鱼上架助手</strong>
-          <span>整理商品，确认后填表</span>
-        </div>
-      </header>
+        <header className="app-header">
+          <div className="brand-mark" aria-hidden="true">
+            闲
+          </div>
+          <div className="brand-copy">
+            <strong>闲鱼上架助手</strong>
+            <span>整理商品，确认后填表</span>
+          </div>
+        </header>
 
-      <nav className="view-tabs" aria-label="主要功能">
-        {NAVIGATION.map((item) => (
-          <button
-            className={state.activeView === item.id ? 'view-tab view-tab--active' : 'view-tab'}
-            type="button"
-            key={item.id}
-            onClick={() => dispatch({ type: 'VIEW_CHANGED', view: item.id })}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav>
+        <nav className="view-tabs" aria-label="主要功能">
+          {NAVIGATION.map((item) => (
+            <button
+              className={state.activeView === item.id ? 'view-tab view-tab--active' : 'view-tab'}
+              type="button"
+              key={item.id}
+              onClick={() => dispatch({ type: 'VIEW_CHANGED', view: item.id })}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
 
-      <main className="app-main">
-        {panelSide === 'left' ? (
-          <aside className="panel-note">
-            侧边栏位置由 Chrome 控制。如需放在右侧，请在 Chrome 侧边栏设置中切换。
-          </aside>
-        ) : null}
+        <main className="app-main">
+          {panelSide === 'left' ? (
+            <aside className="panel-note">
+              侧边栏位置由 Chrome 控制。如需放在右侧，请在 Chrome 侧边栏设置中切换。
+            </aside>
+          ) : null}
 
-        {state.activeView === 'product' ? (
-          <>
-            <LoginBanner
-              state={state.loginState}
-              message={loginMessage}
-              isRefreshing={isLoginRefreshing}
-              onRefresh={() => void refreshXianyuLogin()}
-              onLogin={() => void services.openXianyuLogin()}
-            />
-            <section className="source-card">
-              <div className="section-heading">
-                <div>
-                  <span className="eyebrow">淘宝与京东</span>
-                  <h1>从商品链接开始</h1>
-                </div>
-                <span className="step-number">01</span>
-              </div>
-              <div className="field">
-                <label htmlFor="source-url">商品链接</label>
-                <div className="input-action">
-                  <input
-                    ref={sourceInputRef}
-                    id="source-url"
-                    type="url"
-                    value={state.sourceUrl}
-                    placeholder="粘贴淘宝或京东商品链接"
-                    onChange={(event) =>
-                      dispatch({ type: 'SOURCE_URL_CHANGED', url: event.target.value })
-                    }
-                  />
-                  <button
-                    className="button button--primary"
-                    type="button"
-                    disabled={state.sourceUrl.trim().length === 0 || isBusy}
-                    onClick={() => void parseProduct()}
-                  >
-                    解析商品
-                  </button>
-                </div>
-              </div>
-              <p className="inline-status" aria-live="polite">
-                {state.statusMessage}
-              </p>
-              {state.draft === null ? (
-                <button className="button button--quiet" type="button" onClick={createManualEntry}>
-                  手动填写
-                </button>
-              ) : null}
-              {state.errorMessage === null ? null : (
-                <p className="error-message">{state.errorMessage}</p>
-              )}
-            </section>
-
-            {state.draft === null ? (
-              <section className="empty-state">
-                <span className="empty-state__index">02</span>
-                <h2>编辑与扩写</h2>
-                <p>解析商品，或选择手动填写，再编辑标题、价格和描述。</p>
-              </section>
-            ) : (
-              <ProductEditor
-                draft={state.draft}
-                onChange={(draft) => dispatch({ type: 'DRAFT_CHANGED', draft })}
-                onImageToggle={(id) => dispatch({ type: 'IMAGE_SELECTION_TOGGLED', id })}
-                onImageLoadStatus={(id, loadStatus) =>
-                  dispatch({ type: 'IMAGE_LOAD_STATUS_CHANGED', id, loadStatus })
-                }
-                resolveLocalAsset={(assetId) => services.loadMedia(assetId)}
-                onUploadImages={(files) => void uploadImages(files)}
-                onUploadVideo={(file) => void uploadVideo(file)}
-                onRemoveImage={(id) => void removeImage(id)}
-                onRemoveVideo={() => void removeVideo()}
-                onReturnToStart={returnToStart}
-                returnToStartButtonRef={returnToStartButtonRef}
+          {state.activeView === 'product' ? (
+            <>
+              <LoginBanner
+                state={state.loginState}
+                message={loginMessage}
+                isRefreshing={isLoginRefreshing}
+                onRefresh={() => void refreshXianyuLogin()}
+                onLogin={() => void services.openXianyuLogin()}
               />
-            )}
+              <section className="source-card">
+                <div className="section-heading">
+                  <div>
+                    <span className="eyebrow">淘宝与京东</span>
+                    <h1>从商品链接开始</h1>
+                  </div>
+                  <span className="step-number">01</span>
+                </div>
+                <div className="field">
+                  <label htmlFor="source-url">商品链接</label>
+                  <div className="input-action">
+                    <input
+                      ref={sourceInputRef}
+                      id="source-url"
+                      type="url"
+                      value={state.sourceUrl}
+                      placeholder="粘贴淘宝或京东商品链接"
+                      onChange={(event) =>
+                        dispatch({ type: 'SOURCE_URL_CHANGED', url: event.target.value })
+                      }
+                    />
+                    <button
+                      className="button button--primary"
+                      type="button"
+                      disabled={state.sourceUrl.trim().length === 0 || isBusy}
+                      onClick={() => void parseProduct()}
+                    >
+                      解析商品
+                    </button>
+                  </div>
+                </div>
+                <p className="inline-status" aria-live="polite">
+                  {state.statusMessage}
+                </p>
+                {state.draft === null ? (
+                  <button
+                    className="button button--quiet"
+                    type="button"
+                    onClick={createManualEntry}
+                  >
+                    手动填写
+                  </button>
+                ) : null}
+                {state.errorMessage === null ? null : (
+                  <p className="error-message">{state.errorMessage}</p>
+                )}
+              </section>
 
-          </>
-        ) : null}
+              {state.draft === null ? (
+                <section className="empty-state">
+                  <span className="empty-state__index">02</span>
+                  <h2>编辑与扩写</h2>
+                  <p>解析商品，或选择手动填写，再编辑标题、价格和描述。</p>
+                </section>
+              ) : (
+                <ProductEditor
+                  draft={state.draft}
+                  onChange={(draft) => dispatch({ type: 'DRAFT_CHANGED', draft })}
+                  onImageLoadStatus={(id, loadStatus) =>
+                    dispatch({ type: 'IMAGE_LOAD_STATUS_CHANGED', id, loadStatus })
+                  }
+                  resolveLocalAsset={(assetId) => services.loadMedia(assetId)}
+                  isUploadingImages={isUploadingImages}
+                  isUploadingVideos={isUploadingVideos}
+                  onUploadImages={(files) => void uploadImages(files)}
+                  onUploadVideos={(files) => void uploadVideos(files)}
+                  onRemoveImage={(id) => void removeImage(id)}
+                  onRemoveVideo={(id) => void removeVideo(id)}
+                  onReturnToStart={returnToStart}
+                  returnToStartButtonRef={returnToStartButtonRef}
+                />
+              )}
+            </>
+          ) : null}
 
-        {state.activeView === 'settings' ? (
-          <AiSettingsForm
-            settings={settings}
-            status={settingsStatus}
-            onChange={setSettings}
-            onSave={() => void saveSettings()}
-            onTest={() => void testConnection()}
-          />
-        ) : null}
+          {state.activeView === 'settings' ? (
+            <AiSettingsForm
+              settings={settings}
+              status={settingsStatus}
+              onChange={setSettings}
+              onSave={() => void saveSettings()}
+              onTest={() => void testConnection()}
+            />
+          ) : null}
 
-        {state.activeView === 'logs' ? <OperationLog entries={logs} /> : null}
-      </main>
+          {state.activeView === 'logs' ? <OperationLog entries={logs} /> : null}
+        </main>
 
-      <footer className="action-dock">
-        <p>最终发布需在闲鱼页面手动完成</p>
-        <div className="button-row">
-          <button
-            className="button button--secondary"
-            type="button"
-            disabled={expansionDisabled}
-            aria-busy={state.phase === 'expanding'}
-            onClick={() => void expandDraft()}
-          >
-            {state.phase === 'expanding' ? (
-              <span className="ai-expansion-spinner" aria-hidden="true" />
-            ) : null}
-            {state.phase === 'expanding' ? 'AI 扩写中' : 'AI 扩写'}
-          </button>
-          <button
-            className="button button--primary button--wide"
-            type="button"
-            disabled={fillDisabled}
-            onClick={() => void fillDraft()}
-          >
-            填入闲鱼
-          </button>
-        </div>
-      </footer>
+        <footer className="action-dock">
+          <p>最终发布需在闲鱼页面手动完成</p>
+          <div className="button-row">
+            <button
+              className="button button--secondary"
+              type="button"
+              disabled={expansionDisabled}
+              aria-busy={state.phase === 'expanding'}
+              onClick={() => void expandDraft()}
+            >
+              {state.phase === 'expanding' ? (
+                <span className="ai-expansion-spinner" aria-hidden="true" />
+              ) : null}
+              {state.phase === 'expanding' ? 'AI 扩写中' : 'AI 扩写'}
+            </button>
+            <button
+              className="button button--primary button--wide"
+              type="button"
+              disabled={fillDisabled}
+              onClick={() => void fillDraft()}
+            >
+              填入闲鱼
+            </button>
+          </div>
+        </footer>
       </div>
 
       {resetConfirmation === null ? null : (
@@ -776,16 +829,13 @@ function isVideoMimeType(value: string): value is 'video/mp4' | 'video/quicktime
   return value === 'video/mp4' || value === 'video/quicktime';
 }
 
-function formatRejectedFiles(
-  rejected: readonly { fileName: string; reason: string }[]
-): string {
+function formatRejectedFiles(rejected: readonly { fileName: string; reason: string }[]): string {
   return rejected.map(({ fileName, reason }) => `${fileName}：${reason}`).join('；');
 }
 
-function selectedLocalByteLength(draft: ProductDraft): number {
+function localImageByteLength(draft: ProductDraft): number {
   return draft.images.reduce(
-    (total, image) =>
-      image.selected && image.location.kind === 'local' ? total + image.location.byteLength : total,
+    (total, image) => (image.location.kind === 'local' ? total + image.location.byteLength : total),
     0
   );
 }
@@ -795,14 +845,14 @@ function hasImageCapacity(
   pendingImages: readonly ProductDraft['images'][number][],
   nextByteLength: number
 ): boolean {
-  const selectedCount = draft.images.filter((image) => image.selected).length + pendingImages.length;
+  const mediaCount = draft.images.length + draft.videos.length + pendingImages.length;
   const pendingByteLength = pendingImages.reduce(
     (total, image) => total + (image.location.kind === 'local' ? image.location.byteLength : 0),
     0
   );
   return (
-    selectedCount < MAX_SELECTED_IMAGES &&
-    selectedLocalByteLength(draft) + pendingByteLength + nextByteLength <= MAX_TOTAL_IMAGE_BYTES
+    mediaCount < MAX_MEDIA_COUNT &&
+    localImageByteLength(draft) + pendingByteLength + nextByteLength <= MAX_TOTAL_IMAGE_BYTES
   );
 }
 
@@ -811,13 +861,19 @@ function imageCapacityReason(
   pendingImages: readonly ProductDraft['images'][number][],
   nextByteLength: number
 ): string {
-  if (draft === null || draft.images.filter((image) => image.selected).length + pendingImages.length >= MAX_SELECTED_IMAGES) {
-    return `最多只能选择 ${String(MAX_SELECTED_IMAGES)} 张图片`;
+  if (
+    draft === null ||
+    draft.images.length + draft.videos.length + pendingImages.length >= MAX_MEDIA_COUNT
+  ) {
+    return `图片和视频合计最多只能添加 ${String(MAX_MEDIA_COUNT)} 个`;
   }
-  return selectedLocalByteLength(draft) + pendingImages.reduce(
-    (total, image) => total + (image.location.kind === 'local' ? image.location.byteLength : 0),
-    0
-  ) + nextByteLength > MAX_TOTAL_IMAGE_BYTES
+  return localImageByteLength(draft) +
+    pendingImages.reduce(
+      (total, image) => total + (image.location.kind === 'local' ? image.location.byteLength : 0),
+      0
+    ) +
+    nextByteLength >
+    MAX_TOTAL_IMAGE_BYTES
     ? '图片总大小不能超过 20 MB'
     : '本地媒体保存失败';
 }

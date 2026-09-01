@@ -8,6 +8,20 @@ import {
 } from '../../src/storage/operation-log';
 
 describe('sanitizeLogEntry', () => {
+  it('保留后台生成的 UUID 日志标识', () => {
+    const id = '8f14e45f-ea47-4b3f-a30b-9f12e7d6c421';
+
+    const sanitized = sanitizeLogEntry({
+      id,
+      timestamp: '2026-08-31T10:00:00.000Z',
+      stage: 'login',
+      outcome: 'success',
+      message: '登录状态检查完成'
+    });
+
+    expect(sanitized.id).toBe(id);
+  });
+
   it('删除授权头、API Key、Cookie 和 URL 用户信息', () => {
     const sanitized = sanitizeLogEntry({
       id: 'log-1',
@@ -107,7 +121,8 @@ describe('sanitizeLogEntry', () => {
       outcome: 'failure',
       message: '图片预览失败：blob:https://extension.example/object',
       details: {
-        error: 'assetId=asset-secret，authToken=auth-secret，文件位于 /Users/mint/private-image.png',
+        error:
+          'assetId=asset-secret，authToken=auth-secret，文件位于 /Users/mint/private-image.png',
         result: 'data:image/png;base64,cHJpdmF0ZS1iaW5hcnk=',
         warnings: ['authToken=auth-secret']
       }
@@ -127,10 +142,7 @@ describe('sanitizeLogEntry', () => {
       outcome: 'warning',
       message: '图片处理完成',
       details: {
-        warnings: [
-          `local-${assetId}：本地图片不存在`,
-          `asset-${assetId}：读取失败`
-        ]
+        warnings: [`local-${assetId}：本地图片不存在`, `asset-${assetId}：读取失败`]
       }
     });
 

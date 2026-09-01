@@ -23,7 +23,6 @@ export type ProductImageLocation =
 export interface ProductImage {
   id: string;
   location: ProductImageLocation;
-  selected: boolean;
   loadStatus: ImageLoadStatus;
 }
 
@@ -60,7 +59,7 @@ export interface ProductDraft {
   originalPrice?: number;
   currency: string;
   images: ProductImage[];
-  video?: ProductVideo;
+  videos: ProductVideo[];
   warnings: string[];
   confidence: ExtractionConfidence;
   shippingMethod: string;
@@ -88,8 +87,7 @@ export interface ProductExtractionError {
 }
 
 export type ProductExtractionResponse =
-  | { ok: true; product: ParsedProduct }
-  | { ok: false; error: ProductExtractionError };
+  { ok: true; product: ParsedProduct } | { ok: false; error: ProductExtractionError };
 
 export function getRemoteImageUrl(image: ProductImage): string | null {
   return image.location.kind === 'remote' ? image.location.url : null;
@@ -99,5 +97,5 @@ export function getLocalAssetIds(draft: ProductDraft): string[] {
   const imageIds = draft.images.flatMap((image) =>
     image.location.kind === 'local' ? [image.location.assetId] : []
   );
-  return draft.video === undefined ? imageIds : [...imageIds, draft.video.assetId];
+  return [...imageIds, ...draft.videos.map((video) => video.assetId)];
 }

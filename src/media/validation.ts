@@ -1,4 +1,4 @@
-export const MAX_SELECTED_IMAGES = 9;
+export const MAX_MEDIA_COUNT = 9;
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
@@ -16,13 +16,15 @@ export interface ImageBatchValidation {
 }
 
 export type VideoValidation =
-  | { ok: true; mimeType: 'video/mp4' | 'video/quicktime' }
-  | { ok: false; reason: string };
+  { ok: true; mimeType: 'video/mp4' | 'video/quicktime' } | { ok: false; reason: string };
 
-export function validateImageBatch(files: readonly File[], remainingSlots: number): ImageBatchValidation {
+export function validateImageBatch(
+  files: readonly File[],
+  remainingSlots: number
+): ImageBatchValidation {
   const accepted: File[] = [];
   const rejected: RejectedMediaFile[] = [];
-  const availableSlots = Math.max(0, Math.min(MAX_SELECTED_IMAGES, Math.floor(remainingSlots)));
+  const availableSlots = Math.max(0, Math.min(MAX_MEDIA_COUNT, Math.floor(remainingSlots)));
   let acceptedByteLength = 0;
 
   for (const file of files) {
@@ -37,7 +39,7 @@ export function validateImageBatch(files: readonly File[], remainingSlots: numbe
     if (accepted.length >= availableSlots) {
       rejected.push({
         fileName: file.name,
-        reason: `最多只能选择 ${String(MAX_SELECTED_IMAGES)} 张图片`
+        reason: `图片和视频合计最多只能添加 ${String(MAX_MEDIA_COUNT)} 个`
       });
       continue;
     }

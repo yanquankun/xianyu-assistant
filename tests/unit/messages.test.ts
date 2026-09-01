@@ -24,6 +24,7 @@ const draft = {
   price: 88,
   currency: 'CNY',
   images: [],
+  videos: [],
   warnings: [],
   confidence: 'high',
   shippingMethod: '包邮',
@@ -180,13 +181,81 @@ describe('parseRuntimeMessage', () => {
         error: { message: '页面不存在', code: 'PAGE_ERROR' }
       })
     ).toEqual({ ok: false, error: { message: '页面不存在', code: 'PAGE_ERROR' } });
-    expect(parseProductExtractionResponse({ ok: true, product: { title: '字段不完整' } })).toBeNull();
+    expect(
+      parseProductExtractionResponse({ ok: true, product: { title: '字段不完整' } })
+    ).toBeNull();
     expect(parseProductExtractionResponse({ ok: false, error: { message: 400 } })).toBeNull();
-    expect(parseProductExtractionResponse({ ok: false, error: { message: '错误', extra: {} } })).toBeNull();
+    expect(
+      parseProductExtractionResponse({ ok: false, error: { message: '错误', extra: {} } })
+    ).toBeNull();
   });
 });
 
 describe('parseStoredProductDraft', () => {
+  it('迁移旧选中态和单视频时只保留会提交的媒体并遵守九个上限', () => {
+    const result = parseStoredProductDraft({
+      ...draft,
+      videos: undefined,
+      images: Array.from({ length: 10 }, (_, index) => ({
+        id: `legacy-${String(index + 1)}`,
+        location: {
+          kind: 'remote',
+          url: `https://img.example.com/${String(index + 1)}.jpg`,
+          extractedBy: 'dom'
+        },
+        selected: index !== 1,
+        loadStatus: 'loaded'
+      })),
+      video: {
+        id: 'legacy-video',
+        assetId: 'asset-video',
+        fileName: 'demo.mp4',
+        mimeType: 'video/mp4',
+        byteLength: 5
+      }
+    });
+
+    expect(result?.migrated).toBe(true);
+    expect(result?.draft.images).toHaveLength(8);
+    expect(result?.draft.images[0]).not.toHaveProperty('selected');
+    expect(result?.draft.videos).toEqual([
+      {
+        id: 'legacy-video',
+        assetId: 'asset-video',
+        fileName: 'demo.mp4',
+        mimeType: 'video/mp4',
+        byteLength: 5
+      }
+    ]);
+    expect(result?.draft).not.toHaveProperty('video');
+  });
+
+  it('运行时草稿按图片和视频合计九个媒体校验', () => {
+    const image = {
+      id: 'remote-image',
+      location: {
+        kind: 'remote',
+        url: 'https://img.example.com/remote.jpg',
+        extractedBy: 'dom'
+      },
+      loadStatus: 'loaded'
+    };
+    const video = {
+      id: 'local-video',
+      assetId: 'asset-video',
+      fileName: 'demo.mp4',
+      mimeType: 'video/mp4',
+      byteLength: 5
+    };
+
+    expect(isProductDraft({ ...draft, images: new Array(8).fill(image), videos: [video] })).toBe(
+      true
+    );
+    expect(isProductDraft({ ...draft, images: new Array(9).fill(image), videos: [video] })).toBe(
+      false
+    );
+  });
+
   it('把旧版远程图片迁移为可判别位置结构', () => {
     const result = parseStoredProductDraft({
       ...draft,
@@ -210,7 +279,6 @@ describe('parseStoredProductDraft', () => {
           url: 'https://img.example.com/a.jpg',
           extractedBy: 'dom'
         },
-        selected: true,
         loadStatus: 'loaded'
       }
     ]);
@@ -291,7 +359,6 @@ describe('parseStoredProductDraft', () => {
                 url: 'https://img.example.com/remote.jpg',
                 extractedBy: 'dom'
               },
-              selected: true,
               loadStatus: 'loaded'
             }
           ]

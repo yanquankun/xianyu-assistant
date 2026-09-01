@@ -9,12 +9,7 @@ import {
   type TabSettledDependencies,
   type TabUpdatedListener
 } from './tab-settle';
-import {
-  selectXianyuLoginTab,
-  selectXianyuTab,
-  withSourceTab,
-  type BrowserTab
-} from './tabs';
+import { selectXianyuLoginTab, selectXianyuTab, withSourceTab, type BrowserTab } from './tabs';
 import type { AppError, AppErrorCode, OperationResult } from '../domain/errors';
 import {
   parseProductExtractionResponse,
@@ -28,7 +23,7 @@ import type { OperationLogEntry } from '../storage/operation-log';
 import {
   formatImageDownloadFailureWarning,
   parseXianyuFillResult,
-  prepareSelectedImages,
+  prepareImages,
   type FillResult
 } from '../xianyu/fill';
 import {
@@ -127,8 +122,14 @@ async function waitForTabComplete(tabId: number): Promise<void> {
 }
 
 function tabSettleDependencies(): TabSettledDependencies {
-  const updatedWrappers = new Map<TabUpdatedListener, Parameters<typeof browser.tabs.onUpdated.addListener>[0]>();
-  const removedWrappers = new Map<TabRemovedListener, Parameters<typeof browser.tabs.onRemoved.addListener>[0]>();
+  const updatedWrappers = new Map<
+    TabUpdatedListener,
+    Parameters<typeof browser.tabs.onUpdated.addListener>[0]
+  >();
+  const removedWrappers = new Map<
+    TabRemovedListener,
+    Parameters<typeof browser.tabs.onRemoved.addListener>[0]
+  >();
   return {
     async get(tabId): Promise<SettledBrowserTab> {
       const tab = await browser.tabs.get(tabId);
@@ -233,10 +234,7 @@ function xianyuContentDependencies(): XianyuContentDependencies {
   };
 }
 
-async function extractProductFromTab(
-  tabId: number,
-  hintedTitle?: string
-): Promise<ParsedProduct> {
+async function extractProductFromTab(tabId: number, hintedTitle?: string): Promise<ParsedProduct> {
   await browser.scripting.executeScript({
     target: { tabId },
     files: ['/product-extractor.js']
@@ -255,7 +253,9 @@ async function extractProductFromTab(
   return extraction.product;
 }
 
-async function parseProduct(message: Extract<RuntimeMessage, { type: 'PARSE_PRODUCT' }>): Promise<ParsedProduct> {
+async function parseProduct(
+  message: Extract<RuntimeMessage, { type: 'PARSE_PRODUCT' }>
+): Promise<ParsedProduct> {
   const normalized = normalizeHttpUrl(message.url);
   const tabs = await listTabs();
   return withSourceTab(
@@ -319,12 +319,8 @@ function validateDraft(draft: ProductDraft): number {
   ) {
     throw new Error('请填写有效原价，或留空');
   }
-  const selectedImages = draft.images.filter((image) => image.selected);
-  if (selectedImages.length === 0) {
-    throw new Error('请至少选择一张商品图片');
-  }
-  if (selectedImages.some((image) => image.loadStatus !== 'loaded')) {
-    throw new Error('请等待已选择图片加载完成，或取消加载失败的图片');
+  if (draft.images.some((image) => image.loadStatus !== 'loaded')) {
+    throw new Error('请等待图片加载完成，或删除加载失败的图片');
   }
   return draft.price;
 }
@@ -360,17 +356,16 @@ async function fillDraft(draft: ProductDraft): Promise<FillResult> {
     throw new Error('无法确认闲鱼登录状态，请在闲鱼页面检查后重试');
   }
 
-  const downloaded = await prepareSelectedImages(fetch, mediaStore, draft.images);
-  if (downloaded.files.length === 0) {
-    throw new Error(downloaded.failures.at(0)?.message ?? '没有可上传图片');
-  }
-  let videoTransfer: Awaited<ReturnType<typeof mediaTransferRegistry.create>> | undefined;
-  let videoFailure: string | undefined;
-  if (draft.video !== undefined) {
+  const downloaded = await prepareImages(fetch, mediaStore, draft.images);
+  const videoTransfers: Awaited<ReturnType<typeof mediaTransferRegistry.create>>[] = [];
+  const videoFailures: string[] = [];
+  for (const video of draft.videos) {
     try {
-      videoTransfer = await mediaTransferRegistry.create(draft.video.assetId, tab.tabId);
+      videoTransfers.push(await mediaTransferRegistry.create(video.assetId, tab.tabId));
     } catch (error) {
-      videoFailure = error instanceof Error ? error.message : '视频传输准备失败';
+      videoFailures.push(
+        `${video.fileName}：${error instanceof Error ? error.message : '视频传输准备失败'}`
+      );
     }
   }
   try {
@@ -384,7 +379,7 @@ async function fillDraft(draft: ProductDraft): Promise<FillResult> {
         shippingMethod: draft.shippingMethod,
         categoryNote: draft.categoryNote,
         images: downloaded.files,
-        ...(videoTransfer === undefined ? {} : { videoTransfer })
+        ...(videoTransfers.length === 0 ? {} : { videoTransfers })
       }
     });
     const fillResult = parseXianyuFillResult(response);
@@ -399,17 +394,23 @@ async function fillDraft(draft: ProductDraft): Promise<FillResult> {
       ...fillResult.value.warnings,
       ...downloaded.failures.map(formatImageDownloadFailureWarning)
     ];
-    if (videoFailure !== undefined) {
-      skipped.push({ field: 'video', reason: `${videoFailure}，请在闲鱼页面手动上传视频` });
-      warnings.push(`视频未自动填入：${videoFailure}`);
+    if (videoFailures.length > 0) {
+      const reason = `${videoFailures.join('；')}，请在闲鱼页面手动上传视频`;
+      const existingVideoSkip = skipped.find((item) => item.field === 'video');
+      if (existingVideoSkip === undefined) {
+        skipped.push({ field: 'video', reason });
+      } else {
+        existingVideoSkip.reason = `${existingVideoSkip.reason}；${reason}`;
+      }
+      warnings.push(`部分视频未自动填入：${videoFailures.join('；')}`);
     }
     return { ...fillResult.value, skipped, warnings };
   } finally {
-    if (videoTransfer !== undefined) {
-      await mediaTransferRegistry
-        .release(videoTransfer.sessionId, tab.tabId)
-        .catch(() => undefined);
-    }
+    await Promise.all(
+      videoTransfers.map((transfer) =>
+        mediaTransferRegistry.release(transfer.sessionId, tab.tabId).catch(() => undefined)
+      )
+    );
   }
 }
 

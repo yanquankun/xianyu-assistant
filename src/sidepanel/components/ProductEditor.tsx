@@ -7,13 +7,14 @@ import { MediaPicker } from './MediaPicker';
 interface ProductEditorProps {
   draft: ProductDraft;
   onChange: (draft: ProductDraft) => void;
-  onImageToggle: (id: string) => void;
   onImageLoadStatus: (id: string, status: ImageLoadStatus) => void;
   resolveLocalAsset: (assetId: string) => Promise<StoredMediaAsset | null>;
+  isUploadingImages: boolean;
+  isUploadingVideos: boolean;
   onUploadImages: (files: readonly File[]) => void;
-  onUploadVideo: (file: File) => void;
+  onUploadVideos: (files: readonly File[]) => void;
   onRemoveImage: (id: string) => void;
-  onRemoveVideo: () => void;
+  onRemoveVideo: (id: string) => void;
   onReturnToStart: () => void;
   returnToStartButtonRef: Ref<HTMLButtonElement>;
 }
@@ -27,11 +28,12 @@ const PLATFORM_LABELS: Record<ProductDraft['platform'], string> = {
 export function ProductEditor({
   draft,
   onChange,
-  onImageToggle,
   onImageLoadStatus,
   resolveLocalAsset,
+  isUploadingImages,
+  isUploadingVideos,
   onUploadImages,
-  onUploadVideo,
+  onUploadVideos,
   onRemoveImage,
   onRemoveVideo,
   onReturnToStart,
@@ -143,12 +145,12 @@ export function ProductEditor({
         <span>商品媒体</span>
         <MediaPicker
           images={draft.images}
-          video={draft.video}
-          selectedCount={draft.images.filter((image) => image.selected).length}
+          videos={draft.videos}
+          isUploadingImages={isUploadingImages}
+          isUploadingVideos={isUploadingVideos}
           resolveLocalAsset={resolveLocalAsset}
           onUploadImages={onUploadImages}
-          onUploadVideo={onUploadVideo}
-          onToggle={onImageToggle}
+          onUploadVideos={onUploadVideos}
           onRemoveImage={onRemoveImage}
           onRemoveVideo={onRemoveVideo}
           onLoadStatus={onImageLoadStatus}

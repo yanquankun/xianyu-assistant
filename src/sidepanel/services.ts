@@ -15,10 +15,7 @@ import { createMediaStore } from '../storage/media-store';
 import { createLocalStore, type LocalStore, type StorageAreaLike } from '../storage/local-store';
 import type { OperationLogEntry } from '../storage/operation-log';
 import type { FillResult } from '../xianyu/fill';
-import {
-  parseXianyuLoginCheckResult,
-  type XianyuLoginCheckResult
-} from '../xianyu/login';
+import { parseXianyuLoginCheckResult, type XianyuLoginCheckResult } from '../xianyu/login';
 import type { PanelSide, SidePanelServices } from './App';
 
 function storageArea(): StorageAreaLike {
@@ -97,7 +94,7 @@ function operationId(): string {
 function sourceOrigins(draft: ProductDraft): string[] {
   const origins: string[] = [];
   for (const image of draft.images) {
-    if (!image.selected || image.loadStatus !== 'loaded') {
+    if (image.loadStatus !== 'loaded') {
       continue;
     }
     const remoteUrl = getRemoteImageUrl(image);

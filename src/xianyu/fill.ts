@@ -9,9 +9,9 @@ import {
   findVideoFileInput
 } from './dom';
 import { isMediaTransferDescriptor, type MediaTransferDescriptor } from './media-transfer';
+import { MAX_MEDIA_COUNT } from '../media/validation';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-const MAX_IMAGE_COUNT = 9;
 const MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
 const IMAGE_REQUEST_TIMEOUT_MS = 20_000;
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -51,7 +51,7 @@ export interface XianyuFillPayload {
   shippingMethod: string;
   categoryNote: string;
   images: TransferableImage[];
-  videoTransfer?: MediaTransferDescriptor;
+  videoTransfers?: MediaTransferDescriptor[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -91,7 +91,7 @@ export function isXianyuFillPayload(value: unknown): value is XianyuFillPayload 
       'shippingMethod',
       'categoryNote',
       'images',
-      'videoTransfer'
+      'videoTransfers'
     ]) ||
     !isBoundedText(value.title, 500) ||
     !isBoundedText(value.description, 20_000) ||
@@ -105,9 +105,13 @@ export function isXianyuFillPayload(value: unknown): value is XianyuFillPayload 
     !isBoundedText(value.shippingMethod, 100) ||
     !isBoundedText(value.categoryNote, 1_000) ||
     !Array.isArray(value.images) ||
-    value.images.length > MAX_IMAGE_COUNT ||
+    value.images.length > MAX_MEDIA_COUNT ||
     !value.images.every(isTransferableImage) ||
-    (value.videoTransfer !== undefined && !isMediaTransferDescriptor(value.videoTransfer))
+    (value.videoTransfers !== undefined &&
+      (!Array.isArray(value.videoTransfers) ||
+        value.videoTransfers.length > MAX_MEDIA_COUNT ||
+        !value.videoTransfers.every(isMediaTransferDescriptor))) ||
+    value.images.length + (value.videoTransfers?.length ?? 0) > MAX_MEDIA_COUNT
   ) {
     return false;
   }
@@ -299,11 +303,11 @@ async function downloadImage(
   }
 }
 
-export async function downloadSelectedImages(
+export async function downloadImages(
   fetchImpl: ImageFetchLike,
   images: readonly ProductImage[]
 ): Promise<ImageDownloadResult> {
-  return prepareSelectedImages(fetchImpl, { get: () => Promise.resolve(null) }, images);
+  return prepareImages(fetchImpl, { get: () => Promise.resolve(null) }, images);
 }
 
 function localImageFailure(image: ProductImage, message: string): ImageDownloadFailure {
@@ -359,17 +363,16 @@ async function readLocalImage(
   };
 }
 
-export async function prepareSelectedImages(
+export async function prepareImages(
   fetchImpl: ImageFetchLike,
   mediaStore: Pick<MediaStore, 'get'>,
   images: readonly ProductImage[]
 ): Promise<ImageDownloadResult> {
   const files: TransferableImage[] = [];
   const failures: ImageDownloadFailure[] = [];
-  const selected = images.filter((candidate) => candidate.selected);
-  const allowedSelected = selected.slice(0, MAX_IMAGE_COUNT);
-  const ready = allowedSelected.filter((candidate) => candidate.loadStatus === 'loaded');
-  for (const image of allowedSelected.filter((candidate) => candidate.loadStatus !== 'loaded')) {
+  const allowedImages = images.slice(0, MAX_MEDIA_COUNT);
+  const ready = allowedImages.filter((candidate) => candidate.loadStatus === 'loaded');
+  for (const image of allowedImages.filter((candidate) => candidate.loadStatus !== 'loaded')) {
     const remoteUrl = getRemoteImageUrl(image);
     failures.push(
       remoteUrl === null
@@ -377,15 +380,15 @@ export async function prepareSelectedImages(
         : { id: image.id, url: remoteUrl, message: '图片尚未成功加载' }
     );
   }
-  for (const image of selected.slice(MAX_IMAGE_COUNT)) {
+  for (const image of images.slice(MAX_MEDIA_COUNT)) {
     const remoteUrl = getRemoteImageUrl(image);
     failures.push(
       remoteUrl === null
-        ? { id: image.id, message: `扩展每次最多处理 ${String(MAX_IMAGE_COUNT)} 张图片` }
+        ? { id: image.id, message: `扩展每次最多处理 ${String(MAX_MEDIA_COUNT)} 个媒体` }
         : {
             id: image.id,
             url: remoteUrl,
-            message: `扩展每次最多处理 ${String(MAX_IMAGE_COUNT)} 张图片`
+            message: `扩展每次最多处理 ${String(MAX_MEDIA_COUNT)} 个媒体`
           }
     );
   }
@@ -455,7 +458,7 @@ function createFiles(images: readonly TransferableImage[]): File[] {
 export async function fillXianyuDraft(
   document: Document,
   payload: XianyuFillPayload,
-  videoFile?: File
+  videoFiles: readonly File[] = []
 ): Promise<FillResult> {
   const result: FillResult = { filled: [], skipped: [], warnings: [] };
   fillTextField(
@@ -483,12 +486,10 @@ export async function fillXianyuDraft(
     result
   );
 
-  const input = findImageFileInput(document);
-  if (input === null) {
+  const input = payload.images.length === 0 ? null : findImageFileInput(document);
+  if (payload.images.length > 0 && input === null) {
     result.skipped.push({ field: 'images', reason: '未找到图片上传字段' });
-  } else if (payload.images.length === 0) {
-    result.skipped.push({ field: 'images', reason: '没有可上传图片' });
-  } else {
+  } else if (input !== null) {
     try {
       fillFileInput(input, createFiles(payload.images));
       result.filled.push('images');
@@ -500,7 +501,7 @@ export async function fillXianyuDraft(
     }
   }
 
-  if (videoFile !== undefined) {
+  if (videoFiles.length > 0) {
     const videoInput = findVideoFileInput(document);
     if (videoInput === null) {
       result.skipped.push({
@@ -509,7 +510,7 @@ export async function fillXianyuDraft(
       });
     } else {
       try {
-        fillFileInput(videoInput, [videoFile]);
+        fillFileInput(videoInput, videoFiles);
         result.filled.push('video');
       } catch (error) {
         result.skipped.push({
@@ -518,7 +519,7 @@ export async function fillXianyuDraft(
         });
       }
     }
-  } else if (payload.videoTransfer !== undefined) {
+  } else if ((payload.videoTransfers?.length ?? 0) > 0) {
     result.skipped.push({ field: 'video', reason: '视频传输失败，请在闲鱼页面手动上传视频' });
   }
   await Promise.resolve();

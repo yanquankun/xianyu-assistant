@@ -9,6 +9,7 @@ import type {
   RemoteImageExtractionSource,
   StoredDraftParseResult
 } from './product';
+import { MAX_MEDIA_COUNT } from '../media/validation';
 
 export type RuntimeMessage =
   | {
@@ -32,8 +33,6 @@ export const runtimeMessageTypes: readonly RuntimeMessage['type'][] = [
   'FILL_XIANYU_DRAFT',
   'OPEN_XIANYU_LOGIN'
 ];
-
-const MAX_IMAGES = 20;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -118,9 +117,9 @@ function isProductImageLocation(value: unknown): value is ProductImageLocation {
 function isProductImage(value: unknown): value is ProductImage {
   return (
     isRecord(value) &&
+    hasOnlyKeys(value, ['id', 'location', 'loadStatus']) &&
     isText(value.id, 200, false) &&
     isProductImageLocation(value.location) &&
-    typeof value.selected === 'boolean' &&
     typeof value.loadStatus === 'string' &&
     ['idle', 'loaded', 'failed'].includes(value.loadStatus)
   );
@@ -165,9 +164,12 @@ export function isProductDraft(value: unknown): value is ProductDraft {
     isOptionalPrice(value.originalPrice) &&
     isText(value.currency, 20, false) &&
     Array.isArray(value.images) &&
-    value.images.length <= MAX_IMAGES &&
+    value.images.length <= MAX_MEDIA_COUNT &&
     value.images.every(isProductImage) &&
-    (value.video === undefined || isProductVideo(value.video)) &&
+    Array.isArray(value.videos) &&
+    value.videos.length <= MAX_MEDIA_COUNT &&
+    value.videos.every(isProductVideo) &&
+    value.images.length + value.videos.length <= MAX_MEDIA_COUNT &&
     isStringArray(value.warnings, 100) &&
     typeof value.confidence === 'string' &&
     ['high', 'medium', 'low'].includes(value.confidence) &&
@@ -177,22 +179,30 @@ export function isProductDraft(value: unknown): value is ProductDraft {
   );
 }
 
-function migrateLegacyImage(value: unknown): ProductImage | null {
+function migrateStoredImage(value: unknown): ProductImage | null {
   if (
     !isRecord(value) ||
     !isText(value.id, 200, false) ||
-    !isHttpUrl(value.url) ||
-    !isRemoteImageExtractionSource(value.source) ||
     typeof value.selected !== 'boolean' ||
+    !value.selected ||
     typeof value.loadStatus !== 'string' ||
     !['idle', 'loaded', 'failed'].includes(value.loadStatus)
   ) {
     return null;
   }
+  if (isProductImageLocation(value.location)) {
+    return {
+      id: value.id,
+      location: value.location,
+      loadStatus: value.loadStatus as ProductImage['loadStatus']
+    };
+  }
+  if (!isHttpUrl(value.url) || !isRemoteImageExtractionSource(value.source)) {
+    return null;
+  }
   return {
     id: value.id,
     location: { kind: 'remote', url: value.url, extractedBy: value.source },
-    selected: value.selected,
     loadStatus: value.loadStatus as ProductImage['loadStatus']
   };
 }
@@ -204,24 +214,32 @@ export function parseStoredProductDraft(value: unknown): StoredDraftParseResult 
   if (!isRecord(value) || !Array.isArray(value.images)) {
     return null;
   }
+  const oldVideo = isProductVideo(value.video) ? value.video : null;
+  const storedVideos = Array.isArray(value.videos)
+    ? value.videos.filter(isProductVideo).slice(0, MAX_MEDIA_COUNT)
+    : oldVideo === null
+      ? []
+      : [oldVideo];
   const images: ProductImage[] = [];
   let removedImage = false;
-  let migrated = false;
-  for (const image of value.images.slice(0, MAX_IMAGES)) {
+  let migrated = value.videos === undefined || value.video !== undefined;
+  const availableImageSlots = MAX_MEDIA_COUNT - storedVideos.length;
+  for (const image of value.images) {
+    if (images.length >= availableImageSlots) {
+      removedImage = true;
+      continue;
+    }
     if (isProductImage(image)) {
       images.push(image);
       continue;
     }
-    const legacyImage = migrateLegacyImage(image);
+    const legacyImage = migrateStoredImage(image);
     if (legacyImage === null) {
       removedImage = true;
       continue;
     }
     images.push(legacyImage);
     migrated = true;
-  }
-  if (value.images.length > MAX_IMAGES) {
-    removedImage = true;
   }
   const warnings = isStringArray(value.warnings, 100) ? [...value.warnings] : null;
   if (warnings === null) {
@@ -233,7 +251,8 @@ export function parseStoredProductDraft(value: unknown): StoredDraftParseResult 
     }
     warnings.push('已移除无法恢复的旧版图片');
   }
-  const candidate = { ...value, images, warnings };
+  const candidate: Record<string, unknown> = { ...value, images, videos: storedVideos, warnings };
+  delete candidate.video;
   if (!isProductDraft(candidate)) {
     return null;
   }
@@ -252,7 +271,7 @@ export function parseParsedProduct(value: unknown): ParsedProduct | null {
     isOptionalPrice(value.originalPrice) &&
     isText(value.currency, 20, false) &&
     Array.isArray(value.images) &&
-    value.images.length <= MAX_IMAGES &&
+    value.images.length <= MAX_MEDIA_COUNT &&
     value.images.every(isProductImage) &&
     isStringArray(value.warnings, 100) &&
     typeof value.confidence === 'string' &&

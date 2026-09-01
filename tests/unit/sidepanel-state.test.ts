@@ -35,6 +35,7 @@ const draft: ProductDraft = {
   price: 199,
   currency: 'CNY',
   images: [],
+  videos: [],
   warnings: [],
   confidence: 'high',
   shippingMethod: '包邮',
@@ -43,8 +44,52 @@ const draft: ProductDraft = {
 };
 
 describe('reduceWorkflow', () => {
+  it('图片和视频共享九个媒体名额', () => {
+    const images = Array.from({ length: 8 }, (_, index) => ({
+      id: `image-${String(index + 1)}`,
+      location: {
+        kind: 'remote' as const,
+        url: `https://img.example.com/${String(index + 1)}.jpg`,
+        extractedBy: 'dom' as const
+      },
+      loadStatus: 'loaded' as const
+    }));
+    const editing = {
+      ...initialWorkflowState,
+      phase: 'editing' as const,
+      draft: { ...draft, images, videos: [] }
+    };
+
+    const result = reduceWorkflow(editing, {
+      type: 'VIDEOS_ADDED',
+      videos: [
+        {
+          id: 'video-1',
+          assetId: 'asset-video-1',
+          fileName: 'one.mp4',
+          mimeType: 'video/mp4',
+          byteLength: 5
+        },
+        {
+          id: 'video-2',
+          assetId: 'asset-video-2',
+          fileName: 'two.mp4',
+          mimeType: 'video/mp4',
+          byteLength: 5
+        }
+      ],
+      now: '2026-09-01T10:00:00.000Z'
+    });
+
+    expect(result.draft?.videos).toHaveLength(1);
+    expect(result.draft?.images).toHaveLength(8);
+    expect(result.statusMessage).toContain('最多添加 9 个媒体');
+  });
+
   it('仅当草稿没有用户内容或来源时允许直接返回', () => {
-    expect(draftNeedsResetConfirmation(createManualDraft('manual-1', '2026-08-31T12:00:00.000Z'))).toBe(false);
+    expect(
+      draftNeedsResetConfirmation(createManualDraft('manual-1', '2026-08-31T12:00:00.000Z'))
+    ).toBe(false);
 
     const changedFields: ProductDraft[] = [
       { ...draft, title: '标题' },
@@ -66,20 +111,21 @@ describe('reduceWorkflow', () => {
               mimeType: 'image/png',
               byteLength: 1
             },
-            selected: true,
             loadStatus: 'loaded'
           }
         ]
       },
       {
         ...draft,
-        video: {
-          id: 'local-video',
-          assetId: 'asset-video',
-          fileName: 'video.mp4',
-          mimeType: 'video/mp4',
-          byteLength: 1
-        }
+        videos: [
+          {
+            id: 'local-video',
+            assetId: 'asset-video',
+            fileName: 'video.mp4',
+            mimeType: 'video/mp4',
+            byteLength: 1
+          }
+        ]
       }
     ];
 
@@ -113,11 +159,13 @@ describe('reduceWorkflow', () => {
       errorMessage: null,
       statusMessage: '粘贴淘宝或京东商品链接开始整理'
     });
-    expect(reduceWorkflow(reset, {
-      type: 'FILL_FINISHED',
-      operationId: 'fill-1',
-      message: '迟到完成'
-    })).toBe(reset);
+    expect(
+      reduceWorkflow(reset, {
+        type: 'FILL_FINISHED',
+        operationId: 'fill-1',
+        message: '迟到完成'
+      })
+    ).toBe(reset);
 
     expect(
       reduceWorkflow(reset, {
@@ -172,7 +220,6 @@ describe('reduceWorkflow', () => {
               url: 'https://img.example.com/stored.jpg',
               extractedBy: 'dom'
             },
-            selected: true,
             loadStatus: 'loaded'
           }
         ]
@@ -368,7 +415,6 @@ describe('reduceWorkflow', () => {
               url: 'https://img.example.com/1.jpg',
               extractedBy: 'dom' as const
             },
-            selected: true,
             loadStatus: 'idle' as const
           },
           {
@@ -378,7 +424,6 @@ describe('reduceWorkflow', () => {
               url: 'https://img.example.com/2.jpg',
               extractedBy: 'dom' as const
             },
-            selected: true,
             loadStatus: 'idle' as const
           }
         ]
@@ -396,41 +441,10 @@ describe('reduceWorkflow', () => {
       loadStatus: 'loaded'
     });
 
-    expect(bothLoaded.draft?.images.map((image) => image.loadStatus)).toEqual([
-      'loaded',
-      'loaded'
-    ]);
+    expect(bothLoaded.draft?.images.map((image) => image.loadStatus)).toEqual(['loaded', 'loaded']);
   });
 
-  it('已选择 9 张图片时第 10 张不能被选中', () => {
-    const editing = {
-      ...initialWorkflowState,
-      phase: 'editing' as const,
-      draft: {
-        ...draft,
-        images: Array.from({ length: 20 }, (_, index) => ({
-          id: `image-${String(index + 1)}`,
-          location: {
-            kind: 'remote' as const,
-            url: `https://img.example.com/${String(index + 1)}.jpg`,
-            extractedBy: 'dom' as const
-          },
-          selected: index < 9,
-          loadStatus: 'loaded' as const
-        }))
-      }
-    };
-
-    const result = reduceWorkflow(editing, {
-      type: 'IMAGE_SELECTION_TOGGLED',
-      id: 'image-10'
-    });
-
-    expect(result.draft?.images.filter((image) => image.selected)).toHaveLength(9);
-    expect(result.draft?.images[9]?.selected).toBe(false);
-  });
-
-  it('解析图片与本地图片合计最多选择九张', () => {
+  it('已有九个媒体时不再添加图片', () => {
     const images = Array.from({ length: 9 }, (_, index) => ({
       id: `image-${String(index)}`,
       location: {
@@ -438,7 +452,6 @@ describe('reduceWorkflow', () => {
         url: `https://img.example.com/${String(index)}.jpg`,
         extractedBy: 'dom' as const
       },
-      selected: true,
       loadStatus: 'loaded' as const
     }));
     const state = reduceWorkflow(
@@ -455,7 +468,6 @@ describe('reduceWorkflow', () => {
               mimeType: 'image/png',
               byteLength: 3
             },
-            selected: true,
             loadStatus: 'loaded'
           }
         ],
@@ -464,6 +476,6 @@ describe('reduceWorkflow', () => {
     );
 
     expect(state.draft?.images).toHaveLength(9);
-    expect(state.statusMessage).toContain('最多选择 9 张');
+    expect(state.statusMessage).toContain('最多添加 9 个媒体');
   });
 });

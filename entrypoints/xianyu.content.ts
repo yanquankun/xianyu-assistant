@@ -45,27 +45,36 @@ function connectMediaTransferPort(): MediaTransferClientPort {
 }
 
 async function fillMessage(document: Document, message: FillMessage) {
-  let videoFile: File | undefined;
-  let videoTransferFailure: string | undefined;
-  if (message.payload.videoTransfer !== undefined) {
-    try {
-      videoFile = await receiveMediaFile(message.payload.videoTransfer, connectMediaTransferPort);
-    } catch (error) {
-      videoTransferFailure = error instanceof Error ? error.message : '视频传输失败';
-    }
-  }
-  const result = await fillXianyuDraft(document, message.payload, videoFile);
-  if (videoTransferFailure === undefined) {
+  const videoTransfers = await Promise.all(
+    (message.payload.videoTransfers ?? []).map(async (descriptor) => {
+      try {
+        return { file: await receiveMediaFile(descriptor, connectMediaTransferPort) } as const;
+      } catch (error) {
+        return {
+          failure: `${descriptor.fileName}：${error instanceof Error ? error.message : '视频传输失败'}`
+        } as const;
+      }
+    })
+  );
+  const videoFiles = videoTransfers.flatMap((transfer) =>
+    'file' in transfer ? [transfer.file] : []
+  );
+  const videoTransferFailures = videoTransfers.flatMap((transfer) =>
+    'failure' in transfer ? [transfer.failure] : []
+  );
+  const result = await fillXianyuDraft(document, message.payload, videoFiles);
+  if (videoTransferFailures.length === 0) {
     return result;
   }
+  const failureMessage = videoTransferFailures.join('；');
   return {
     ...result,
     skipped: result.skipped.map((item) =>
       item.field === 'video'
-        ? { ...item, reason: `${videoTransferFailure}，请在闲鱼页面手动上传视频` }
+        ? { ...item, reason: `${failureMessage}，请在闲鱼页面手动上传视频` }
         : item
     ),
-    warnings: [...result.warnings, `视频未自动填入：${videoTransferFailure}`]
+    warnings: [...result.warnings, `部分视频未自动填入：${failureMessage}`]
   };
 }
 

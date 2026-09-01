@@ -6,20 +6,20 @@ import {
   type ProductImage,
   type ProductVideo
 } from '../../domain/product';
-import { MAX_SELECTED_IMAGES } from '../../media/validation';
+import { MAX_MEDIA_COUNT } from '../../media/validation';
 import type { StoredMediaAsset } from '../../storage/media-store';
 import { MediaPreviewDialog } from './MediaPreviewDialog';
 
 export interface MediaPickerProps {
   images: readonly ProductImage[];
-  video?: ProductVideo | undefined;
-  selectedCount: number;
+  videos?: readonly ProductVideo[];
+  isUploadingImages?: boolean;
+  isUploadingVideos?: boolean;
   resolveLocalAsset: (assetId: string) => Promise<StoredMediaAsset | null>;
   onUploadImages: (files: readonly File[]) => void;
-  onUploadVideo: (file: File) => void;
-  onToggle: (id: string) => void;
+  onUploadVideos: (files: readonly File[]) => void;
   onRemoveImage: (id: string) => void;
-  onRemoveVideo: () => void;
+  onRemoveVideo: (id: string) => void;
   onLoadStatus: (id: string, status: ImageLoadStatus) => void;
 }
 
@@ -32,14 +32,95 @@ interface PreviewMedia {
   trigger: HTMLElement;
 }
 
+interface LocalImageThumbnailProps {
+  assetId: string;
+  imageId: string;
+  label: string;
+  loadStatus: ImageLoadStatus;
+  resolveLocalAsset: (assetId: string) => Promise<StoredMediaAsset | null>;
+  onLoadStatus: (id: string, status: ImageLoadStatus) => void;
+}
+
+function LocalImageThumbnail({
+  assetId,
+  imageId,
+  label,
+  loadStatus,
+  resolveLocalAsset,
+  onLoadStatus
+}: LocalImageThumbnailProps) {
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  const resolveLocalAssetRef = useRef(resolveLocalAsset);
+  const onLoadStatusRef = useRef(onLoadStatus);
+
+  useEffect(() => {
+    resolveLocalAssetRef.current = resolveLocalAsset;
+    onLoadStatusRef.current = onLoadStatus;
+  }, [onLoadStatus, resolveLocalAsset]);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+
+    void resolveLocalAssetRef
+      .current(assetId)
+      .then((asset) => {
+        if (asset === null) {
+          if (active) {
+            setThumbnailFailed(true);
+            onLoadStatusRef.current(imageId, 'failed');
+          }
+          return;
+        }
+
+        if (!active) {
+          return;
+        }
+        objectUrl = URL.createObjectURL(asset.blob);
+        setThumbnailUrl(objectUrl);
+      })
+      .catch(() => {
+        if (active) {
+          setThumbnailFailed(true);
+          onLoadStatusRef.current(imageId, 'failed');
+        }
+      });
+
+    return () => {
+      active = false;
+      if (objectUrl !== null) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [assetId, imageId]);
+
+  if (thumbnailUrl === null) {
+    return (
+      <span className="image-tile__placeholder">
+        {thumbnailFailed || loadStatus === 'failed' ? '加载失败' : '加载中'}
+      </span>
+    );
+  }
+
+  return (
+    <img
+      src={thumbnailUrl}
+      alt={label}
+      onLoad={() => onLoadStatusRef.current(imageId, 'loaded')}
+      onError={() => onLoadStatusRef.current(imageId, 'failed')}
+    />
+  );
+}
+
 export function MediaPicker({
   images,
-  video,
-  selectedCount,
+  videos = [],
+  isUploadingImages = false,
+  isUploadingVideos = false,
   resolveLocalAsset,
   onUploadImages,
-  onUploadVideo,
-  onToggle,
+  onUploadVideos,
   onRemoveImage,
   onRemoveVideo,
   onLoadStatus
@@ -49,14 +130,14 @@ export function MediaPicker({
   const previewRef = useRef<PreviewMedia | null>(null);
   const previewRequestRef = useRef(0);
   const mountedRef = useRef(true);
-  const mediaRef = useRef({ images, video });
+  const mediaRef = useRef({ images, videos });
   const [preview, setPreview] = useState<PreviewMedia | null>(null);
   const [loadingPreview, setLoadingPreview] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
   useEffect(() => {
-    mediaRef.current = { images, video };
-  }, [images, video]);
+    mediaRef.current = { images, videos };
+  }, [images, videos]);
 
   const disposePreview = () => {
     const current = previewRef.current;
@@ -79,17 +160,14 @@ export function MediaPicker({
     setPreview(next);
   };
 
-  useEffect(
-    () => {
-      mountedRef.current = true;
-      return () => {
-        mountedRef.current = false;
-        previewRequestRef.current += 1;
-        disposePreview();
-      };
-    },
-    []
-  );
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      previewRequestRef.current += 1;
+      disposePreview();
+    };
+  }, []);
 
   const openLocalPreview = async (
     assetId: string,
@@ -106,7 +184,16 @@ export function MediaPicker({
     setLoadingPreview(assetId);
     try {
       const asset = await resolveLocalAsset(assetId);
-      if (!isPreviewRequestCurrent(requestToken, assetId, kind, mountedRef, previewRequestRef, mediaRef)) {
+      if (
+        !isPreviewRequestCurrent(
+          requestToken,
+          assetId,
+          kind,
+          mountedRef,
+          previewRequestRef,
+          mediaRef
+        )
+      ) {
         return;
       }
       if (asset === null) {
@@ -114,13 +201,31 @@ export function MediaPicker({
         return;
       }
       const objectUrl = URL.createObjectURL(asset.blob);
-      if (!isPreviewRequestCurrent(requestToken, assetId, kind, mountedRef, previewRequestRef, mediaRef)) {
+      if (
+        !isPreviewRequestCurrent(
+          requestToken,
+          assetId,
+          kind,
+          mountedRef,
+          previewRequestRef,
+          mediaRef
+        )
+      ) {
         URL.revokeObjectURL(objectUrl);
         return;
       }
       replacePreview({ id: assetId, kind, label, objectUrl, trigger });
     } catch {
-      if (isPreviewRequestCurrent(requestToken, assetId, kind, mountedRef, previewRequestRef, mediaRef)) {
+      if (
+        isPreviewRequestCurrent(
+          requestToken,
+          assetId,
+          kind,
+          mountedRef,
+          previewRequestRef,
+          mediaRef
+        )
+      ) {
         showPreviewReadFailure(kind, imageId, onLoadStatus, setPreviewError);
       }
     } finally {
@@ -130,12 +235,16 @@ export function MediaPicker({
     }
   };
 
-  const selectionLimitReached = selectedCount >= MAX_SELECTED_IMAGES;
+  const mediaCount = images.length + videos.length;
+  const mediaLimitReached = mediaCount >= MAX_MEDIA_COUNT;
+  const mediaUploadInProgress = isUploadingImages || isUploadingVideos;
 
   return (
     <>
       <div className="media-toolbar">
-        <span>已选 {String(selectedCount)}/{String(MAX_SELECTED_IMAGES)}</span>
+        <span>
+          媒体 {String(mediaCount)}/{String(MAX_MEDIA_COUNT)}
+        </span>
         <input
           ref={imageInput}
           className="media-file-input"
@@ -143,7 +252,7 @@ export function MediaPicker({
           type="file"
           accept="image/jpeg,image/png,image/webp"
           multiple
-          disabled={selectionLimitReached}
+          disabled={mediaLimitReached || mediaUploadInProgress}
           onChange={(event) => {
             const files = Array.from(event.currentTarget.files ?? []);
             onUploadImages(files);
@@ -153,13 +262,14 @@ export function MediaPicker({
         <button
           type="button"
           className="button button--quiet"
-          disabled={selectionLimitReached}
+          aria-busy={isUploadingImages}
+          disabled={mediaLimitReached || mediaUploadInProgress}
           onClick={() => imageInput.current?.click()}
         >
-          上传图片
+          {isUploadingImages ? '上传中…' : '上传图片'}
         </button>
       </div>
-      {selectionLimitReached ? <p className="empty-note">已达 9 张图片上限</p> : null}
+      {mediaLimitReached ? <p className="empty-note">已达 9 个媒体上限</p> : null}
       {previewError === null ? null : <p className="error-message">{previewError}</p>}
       <div className="image-grid" aria-label="商品图片">
         {images.map((image, index) => {
@@ -169,10 +279,7 @@ export function MediaPicker({
           const label = `商品图片 ${String(imageNumber)}`;
           const previewLoading = localLocation !== null && loadingPreview === localLocation.assetId;
           return (
-            <div
-              className={`image-tile${image.selected ? ' image-tile--selected' : ''}`}
-              key={image.id}
-            >
+            <div className="image-tile" key={image.id}>
               <button
                 type="button"
                 className="image-tile__preview"
@@ -202,55 +309,44 @@ export function MediaPicker({
                   }
                 }}
               >
-                {remoteUrl === null ? (
-                  <span className="image-tile__local-name">{localLocation?.fileName}</span>
+                {localLocation !== null ? (
+                  <LocalImageThumbnail
+                    assetId={localLocation.assetId}
+                    imageId={image.id}
+                    label={label}
+                    loadStatus={image.loadStatus}
+                    resolveLocalAsset={resolveLocalAsset}
+                    onLoadStatus={onLoadStatus}
+                  />
                 ) : (
                   <img
-                    src={remoteUrl}
+                    src={remoteUrl ?? undefined}
                     alt={label}
                     onLoad={() => onLoadStatus(image.id, 'loaded')}
                     onError={() => onLoadStatus(image.id, 'failed')}
                   />
                 )}
               </button>
-              <div className="media-tile-actions">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={image.selected}
-                    disabled={
-                      image.loadStatus === 'failed' || (!image.selected && selectionLimitReached)
-                    }
-                    onChange={() => onToggle(image.id)}
-                    aria-label={`选择${label}`}
-                  />
-                  <span>
-                    {image.loadStatus === 'failed' ? '加载失败' : image.selected ? '已选择' : '未选择'}
-                  </span>
-                </label>
-                <button
-                  type="button"
-                  className="button button--quiet"
-                  onClick={() => {
-                    invalidatePreview();
-                    onRemoveImage(image.id);
-                  }}
-                >
-                  删除{label}
-                </button>
-              </div>
+              <button
+                type="button"
+                className="image-tile__remove"
+                aria-label={`删除${label}`}
+                title={`删除${label}`}
+                onClick={() => {
+                  invalidatePreview();
+                  onRemoveImage(image.id);
+                }}
+              >
+                删除
+              </button>
             </div>
           );
         })}
       </div>
-      <div className="video-card">
+      <div className="video-card video-card--upload">
         <div>
           <strong>商品视频</strong>
-          <p>
-            {video === undefined
-              ? '可选 MP4 或 MOV，最多 100 MB'
-              : `${video.fileName}（${formatByteLength(video.byteLength)}）`}
-          </p>
+          <p>可选 MP4 或 MOV，单个最多 100 MB</p>
         </div>
         <div className="media-tile-actions">
           <input
@@ -259,41 +355,68 @@ export function MediaPicker({
             aria-label="上传商品视频"
             type="file"
             accept="video/mp4,video/quicktime,.mp4,.mov"
+            multiple
+            disabled={mediaLimitReached || mediaUploadInProgress}
             onChange={(event) => {
-              const file = Array.from(event.currentTarget.files ?? [])[0];
-              if (file !== undefined) {
-                onUploadVideo(file);
-              }
+              const files = Array.from(event.currentTarget.files ?? []);
+              onUploadVideos(files);
               event.currentTarget.value = '';
             }}
           />
-          <button type="button" className="button button--quiet" onClick={() => videoInput.current?.click()}>
-            {video === undefined ? '上传视频' : '替换视频'}
+          <button
+            type="button"
+            className="button button--quiet"
+            aria-busy={isUploadingVideos}
+            disabled={mediaLimitReached || mediaUploadInProgress}
+            onClick={() => videoInput.current?.click()}
+          >
+            {isUploadingVideos ? '上传中…' : '上传视频'}
           </button>
-          {video === undefined ? null : (
-            <>
-              <button
-                type="button"
-                className="button button--quiet"
-                onClick={(event) =>
-                  void openLocalPreview(video.assetId, 'video', video.fileName, event.currentTarget)
-                }
-              >
-                预览商品视频
-              </button>
-              <button
-                type="button"
-                className="button button--quiet"
-                onClick={() => {
-                  invalidatePreview();
-                  onRemoveVideo();
-                }}
-              >
-                删除商品视频
-              </button>
-            </>
-          )}
         </div>
+      </div>
+      <div className="video-list" aria-label="商品视频">
+        {videos.map((video, index) => {
+          const videoNumber = index + 1;
+          const label = `商品视频 ${String(videoNumber)}`;
+          const previewLoading = loadingPreview === video.assetId;
+          return (
+            <div className="video-card" key={video.id}>
+              <div>
+                <strong>{label}</strong>
+                <p>{`${video.fileName}（${formatByteLength(video.byteLength)}）`}</p>
+              </div>
+              <div className="media-tile-actions">
+                <button
+                  type="button"
+                  className="button button--quiet"
+                  disabled={previewLoading}
+                  onClick={(event) =>
+                    void openLocalPreview(
+                      video.assetId,
+                      'video',
+                      video.fileName,
+                      event.currentTarget
+                    )
+                  }
+                >
+                  预览{label}
+                </button>
+                <button
+                  type="button"
+                  className="video-card__remove"
+                  aria-label={`删除${label}`}
+                  title={`删除${label}`}
+                  onClick={() => {
+                    invalidatePreview();
+                    onRemoveVideo(video.id);
+                  }}
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          );
+        })}
       </div>
       <MediaPreviewDialog media={preview} onClose={invalidatePreview} />
     </>
@@ -306,13 +429,13 @@ function isPreviewRequestCurrent(
   kind: 'image' | 'video',
   mountedRef: { current: boolean },
   requestRef: { current: number },
-  mediaRef: { current: { images: readonly ProductImage[]; video: ProductVideo | undefined } }
+  mediaRef: { current: { images: readonly ProductImage[]; videos: readonly ProductVideo[] } }
 ): boolean {
   if (!mountedRef.current || requestRef.current !== requestToken) {
     return false;
   }
   return kind === 'video'
-    ? mediaRef.current.video?.assetId === assetId
+    ? mediaRef.current.videos.some((video) => video.assetId === assetId)
     : mediaRef.current.images.some(
         (image) => image.location.kind === 'local' && image.location.assetId === assetId
       );

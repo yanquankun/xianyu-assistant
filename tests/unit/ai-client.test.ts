@@ -27,6 +27,7 @@ const draft: ProductDraft = {
   price: 99,
   currency: 'CNY',
   images: [],
+  videos: [],
   warnings: [],
   confidence: 'high',
   shippingMethod: '包邮',

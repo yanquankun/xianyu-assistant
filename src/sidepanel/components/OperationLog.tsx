@@ -18,7 +18,9 @@ function getDisplayTitle(entry: OperationLogEntry): string {
     return displayTitle;
   }
   const operationLabel = entry.operationLabel?.trim();
-  return operationLabel === undefined || operationLabel.length === 0 ? entry.message : operationLabel;
+  return operationLabel === undefined || operationLabel.length === 0
+    ? entry.message
+    : operationLabel;
 }
 
 function safeHttpUrl(value: string | undefined): string | undefined {
@@ -134,7 +136,7 @@ function DraftDetails({ draft }: { draft: OperationDraftSnapshot }) {
       )}
       {draft.selectedImageCount === undefined ? null : (
         <div>
-          <dt>已选图片</dt>
+          <dt>图片</dt>
           <dd>{draft.selectedImageCount} 张</dd>
         </div>
       )}
@@ -183,7 +185,7 @@ function LogDetails({ entry }: { entry: OperationLogEntry }) {
 }
 
 export function OperationLog({ entries }: OperationLogProps) {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedEntryKey, setExpandedEntryKey] = useState<string | null>(null);
   return (
     <section className="editor-card">
       <div className="section-heading">
@@ -196,38 +198,42 @@ export function OperationLog({ entries }: OperationLogProps) {
         <p className="empty-note">尚无运行记录。</p>
       ) : (
         <ol className="log-list">
-          {[...entries].reverse().map((entry) => {
-            const isExpanded = expandedId === entry.id;
-            const detailsId = `operation-log-details-${entry.id}`;
-            const title = getDisplayTitle(entry);
-            return (
-              <li key={entry.id} className="log-list__item">
-                <span className={`log-outcome log-outcome--${entry.outcome}`} />
-                <div className="log-list__content">
-                  <button
-                    aria-controls={detailsId}
-                    aria-expanded={isExpanded}
-                    className="log-list__toggle"
-                    type="button"
-                    onClick={() => setExpandedId(isExpanded ? null : entry.id)}
-                  >
-                    <strong>{title}</strong>
-                    <span>
-                      {entry.operationLabel ?? entry.message} · {OUTCOME_LABELS[entry.outcome]} ·{' '}
-                      <time dateTime={entry.timestamp}>
-                        {new Date(entry.timestamp).toLocaleString('zh-CN')}
-                      </time>
-                    </span>
-                  </button>
-                  {isExpanded ? (
-                    <div id={detailsId} className="log-list__details">
-                      <LogDetails entry={entry} />
-                    </div>
-                  ) : null}
-                </div>
-              </li>
-            );
-          })}
+          {entries
+            .map((entry, originalIndex) => ({ entry, originalIndex }))
+            .reverse()
+            .map(({ entry, originalIndex }) => {
+              const entryKey = `${entry.id}:${entry.timestamp}:${String(originalIndex)}`;
+              const isExpanded = expandedEntryKey === entryKey;
+              const detailsId = `operation-log-details-${String(originalIndex)}`;
+              const title = getDisplayTitle(entry);
+              return (
+                <li key={entryKey} className="log-list__item">
+                  <span className={`log-outcome log-outcome--${entry.outcome}`} />
+                  <div className="log-list__content">
+                    <button
+                      aria-controls={detailsId}
+                      aria-expanded={isExpanded}
+                      className="log-list__toggle"
+                      type="button"
+                      onClick={() => setExpandedEntryKey(isExpanded ? null : entryKey)}
+                    >
+                      <strong>{title}</strong>
+                      <span>
+                        {entry.operationLabel ?? entry.message} · {OUTCOME_LABELS[entry.outcome]} ·{' '}
+                        <time dateTime={entry.timestamp}>
+                          {new Date(entry.timestamp).toLocaleString('zh-CN')}
+                        </time>
+                      </span>
+                    </button>
+                    {isExpanded ? (
+                      <div id={detailsId} className="log-list__details">
+                        <LogDetails entry={entry} />
+                      </div>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            })}
         </ol>
       )}
     </section>

@@ -241,9 +241,9 @@ test.describe('闲鱼上架助手扩展', () => {
       { name: '本地图片一.png', mimeType: 'image/png', buffer: PNG_BYTES },
       { name: '本地图片二.png', mimeType: 'image/png', buffer: PNG_BYTES }
     ]);
-    await expect(panel.getByText('本地图片一.png')).toBeVisible();
-    await expect(panel.getByText('本地图片二.png')).toBeVisible();
-    await expect(panel.getByText('已选 2/9')).toBeVisible();
+    await expect(panel.getByRole('img', { name: '商品图片 1' })).toBeVisible();
+    await expect(panel.getByRole('img', { name: '商品图片 2' })).toBeVisible();
+    await expect(panel.getByText('媒体 2/9')).toBeVisible();
 
     await panel.getByRole('button', { name: '预览商品图片 1' }).click();
     await expect(panel.getByRole('dialog', { name: '媒体预览' })).toBeVisible();
@@ -263,8 +263,8 @@ test.describe('闲鱼上架助手扩展', () => {
       .toBe(2);
     await panel.close();
     panel = await openSidePanelPage(context);
-    await expect(panel.getByText('本地图片一.png')).toBeVisible();
-    await expect(panel.getByText('本地图片二.png')).toBeVisible();
+    await expect(panel.getByRole('img', { name: '商品图片 1' })).toBeVisible();
+    await expect(panel.getByRole('img', { name: '商品图片 2' })).toBeVisible();
     await panel.getByRole('button', { name: '预览商品图片 2' }).click();
     await expect(panel.getByRole('dialog', { name: '媒体预览' })).toBeVisible();
     await panel.keyboard.press('Escape');

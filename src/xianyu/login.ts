@@ -52,6 +52,21 @@ function hasExactButtonText(document: Document, text: string): boolean {
   );
 }
 
+function hasXianyuPathLink(document: Document, pathname: string): boolean {
+  return Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]')).some((anchor) => {
+    const href = anchor.getAttribute('href');
+    if (href === null) {
+      return false;
+    }
+    try {
+      const url = new URL(href, 'https://www.goofish.com');
+      return url.hostname.toLowerCase() === 'www.goofish.com' && url.pathname === pathname;
+    } catch {
+      return false;
+    }
+  });
+}
+
 export function detectLoginState(document: Document, pageUrl: string): XianyuLoginState {
   if (!isXianyuUrl(pageUrl)) {
     return 'unknown';
@@ -69,7 +84,7 @@ export function detectLoginState(document: Document, pageUrl: string): XianyuLog
 
   const hasUserMarker =
     document.querySelector('[data-user-id], [data-testid="user-avatar"], [class*="user-avatar"]') !==
-    null;
+      null || hasXianyuPathLink(document, '/personal');
   const hasPublishForm =
     document.querySelector('form[data-testid="publish-form"], input[name="title"], textarea[name="description"]') !==
     null;

@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { createFailureLogEntry, createSuccessLogEntry } from '../../src/background/operation-log-factory';
+import {
+  createFailureLogEntry,
+  createSuccessLogEntry
+} from '../../src/background/operation-log-factory';
 import type { ProductDraft } from '../../src/domain/product';
 import type { AiSettings } from '../../src/domain/settings';
 import type { MediaStore } from '../../src/storage/media-store';
-import {
-  formatImageDownloadFailureWarning,
-  prepareSelectedImages
-} from '../../src/xianyu/fill';
+import { formatImageDownloadFailureWarning, prepareImages } from '../../src/xianyu/fill';
 
 const settings: AiSettings = {
   baseUrl: 'https://api.example.com/v1',
@@ -42,17 +42,18 @@ const draft: ProductDraft = {
         mimeType: 'image/png',
         byteLength: 100
       },
-      selected: true,
       loadStatus: 'loaded'
     }
   ],
-  video: {
-    id: 'video-1',
-    assetId: 'video-asset-secret',
-    fileName: 'local-video.mp4',
-    mimeType: 'video/mp4',
-    byteLength: 100
-  },
+  videos: [
+    {
+      id: 'video-1',
+      assetId: 'video-asset-secret',
+      fileName: 'local-video.mp4',
+      mimeType: 'video/mp4',
+      byteLength: 100
+    }
+  ],
   warnings: ['请核对规格'],
   confidence: 'high',
   shippingMethod: '包邮',
@@ -98,7 +99,7 @@ describe('operation log factory', () => {
       ...draft,
       source: { ...draft.source },
       images: [...draft.images],
-      ...(draft.video === undefined ? {} : { video: { ...draft.video } })
+      videos: draft.videos.map((video) => ({ ...video }))
     };
     const entry = createSuccessLogEntry(
       { type: 'EXPAND_DRAFT', settings, draft: inputDraft },
@@ -163,11 +164,10 @@ describe('operation log factory', () => {
         mimeType: 'image/png' as const,
         byteLength: 3
       },
-      selected: true,
       loadStatus: 'loaded' as const
     };
     const mediaStore: Pick<MediaStore, 'get'> = { get: () => Promise.resolve(null) };
-    const imageResult = await prepareSelectedImages(
+    const imageResult = await prepareImages(
       () => Promise.reject(new Error('本地图片不应请求网络')),
       mediaStore,
       [localImage]

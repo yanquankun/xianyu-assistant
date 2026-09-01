@@ -41,6 +41,7 @@ const MAX_LOG_CODE_LENGTH = 100;
 const MAX_LOG_WARNINGS = 100;
 const MAX_LOG_SELECTED_IMAGES = 9;
 const UNSAFE_CONTENT_PLACEHOLDER = '[已省略不安全内容]';
+const INVALID_LOG_ID_PLACEHOLDER = 'invalid-log-id';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -48,9 +49,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isBoundedText(value: unknown, maximum: number, allowEmpty = true): value is string {
   return (
-    typeof value === 'string' &&
-    value.length <= maximum &&
-    (allowEmpty || value.trim().length > 0)
+    typeof value === 'string' && value.length <= maximum && (allowEmpty || value.trim().length > 0)
   );
 }
 
@@ -98,34 +97,26 @@ function sanitizeText(value: string, maximum = MAX_LOG_TEXT_LENGTH): string {
     return UNSAFE_CONTENT_PLACEHOLDER;
   }
   const redacted = redactUrlCredentials(value)
-    .replace(
-      /\bauthorization\s*:\s*(?:bearer\s+)?[^\s,;]+/giu,
-      'Authorization: [已脱敏]'
-    )
+    .replace(/\bauthorization\s*:\s*(?:bearer\s+)?[^\s,;]+/giu, 'Authorization: [已脱敏]')
     .replace(/\bbearer\s+[^\s,;]+/giu, '[已脱敏]')
-    .replace(
-      /\bauth(?:entication)?(?:[_ -]?(?:token|key))?\s*[:=]\s*[^\s,;]+/giu,
-      'auth=[已脱敏]'
-    )
+    .replace(/\bauth(?:entication)?(?:[_ -]?(?:token|key))?\s*[:=]\s*[^\s,;]+/giu, 'auth=[已脱敏]')
     .replace(/\b(?:api[_ -]?key|x-api-key)\s*[:=]\s*[^\s,;]+/giu, 'apiKey=[已脱敏]')
     .replace(/\basset[_ -]?id\s*[:=]\s*[^\s,;]+/giu, 'assetId=[已脱敏]')
-    .replace(
-      /\b(?:local|asset)-[a-z0-9][a-z0-9-]{5,}\b/giu,
-      '[资源标识已脱敏]'
-    )
+    .replace(/\b(?:local|asset)-[a-z0-9][a-z0-9-]{5,}\b/giu, '[资源标识已脱敏]')
     .replace(
       /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/giu,
       '[资源标识已脱敏]'
     )
-    .replace(
-      /\b(?:set-)?cookie\s*:\s*.*?(?=\s+https?:\/\/|$)/giu,
-      'Cookie: [已脱敏]'
-    )
+    .replace(/\b(?:set-)?cookie\s*:\s*.*?(?=\s+https?:\/\/|$)/giu, 'Cookie: [已脱敏]')
     .replace(
       /([?&](?:authorization|token|access_token|api[_-]?key|key)=)[^&#\s]+/giu,
       '$1[已脱敏]'
     );
   return redacted.slice(0, maximum);
+}
+
+function sanitizeLogId(value: string): string {
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(value) ? value : INVALID_LOG_ID_PLACEHOLDER;
 }
 
 function sanitizeHttpUrl(value: string): string | undefined {
@@ -149,9 +140,12 @@ function sanitizeDraftSnapshot(draft: OperationDraftSnapshot): OperationDraftSna
   const sourceUrl = draft.sourceUrl === undefined ? undefined : sanitizeHttpUrl(draft.sourceUrl);
   const canonicalUrl =
     draft.canonicalUrl === undefined ? undefined : sanitizeHttpUrl(draft.canonicalUrl);
-  const title = draft.title === undefined ? undefined : sanitizeText(draft.title, MAX_LOG_TITLE_LENGTH);
+  const title =
+    draft.title === undefined ? undefined : sanitizeText(draft.title, MAX_LOG_TITLE_LENGTH);
   const description =
-    draft.description === undefined ? undefined : sanitizeText(draft.description, MAX_LOG_TEXT_LENGTH);
+    draft.description === undefined
+      ? undefined
+      : sanitizeText(draft.description, MAX_LOG_TEXT_LENGTH);
   const shippingMethod =
     draft.shippingMethod === undefined
       ? undefined
@@ -212,7 +206,9 @@ function sanitizeDetails(details: OperationLogDetails): OperationLogDetails | un
 
 export function sanitizeLogEntry(entry: OperationLogEntry): OperationLogEntry {
   const displayTitle =
-    entry.displayTitle === undefined ? undefined : sanitizeText(entry.displayTitle, MAX_LOG_TITLE_LENGTH);
+    entry.displayTitle === undefined
+      ? undefined
+      : sanitizeText(entry.displayTitle, MAX_LOG_TITLE_LENGTH);
   const operationLabel =
     entry.operationLabel === undefined
       ? undefined
@@ -220,7 +216,7 @@ export function sanitizeLogEntry(entry: OperationLogEntry): OperationLogEntry {
   const code = entry.code === undefined ? undefined : sanitizeText(entry.code, MAX_LOG_CODE_LENGTH);
   const details = entry.details === undefined ? undefined : sanitizeDetails(entry.details);
   return {
-    id: sanitizeText(entry.id, 200),
+    id: sanitizeLogId(entry.id),
     timestamp: sanitizeText(entry.timestamp, 100),
     stage: entry.stage,
     outcome: entry.outcome,
@@ -241,8 +237,11 @@ function parseDraftSnapshot(value: unknown): OperationDraftSnapshot | undefined 
     ? value.canonicalUrl
     : undefined;
   const title = isBoundedText(value.title, MAX_LOG_TITLE_LENGTH) ? value.title : undefined;
-  const description = isBoundedText(value.description, MAX_LOG_TEXT_LENGTH) ? value.description : undefined;
-  const price = typeof value.price === 'number' && Number.isFinite(value.price) ? value.price : undefined;
+  const description = isBoundedText(value.description, MAX_LOG_TEXT_LENGTH)
+    ? value.description
+    : undefined;
+  const price =
+    typeof value.price === 'number' && Number.isFinite(value.price) ? value.price : undefined;
   const originalPrice =
     typeof value.originalPrice === 'number' && Number.isFinite(value.originalPrice)
       ? value.originalPrice
@@ -257,7 +256,9 @@ function parseDraftSnapshot(value: unknown): OperationDraftSnapshot | undefined 
     typeof value.selectedImageCount === 'number' && Number.isInteger(value.selectedImageCount)
       ? value.selectedImageCount
       : undefined;
-  const videoName = isBoundedText(value.videoName, MAX_LOG_TITLE_LENGTH) ? value.videoName : undefined;
+  const videoName = isBoundedText(value.videoName, MAX_LOG_TITLE_LENGTH)
+    ? value.videoName
+    : undefined;
   return sanitizeDraftSnapshot({
     ...(sourceUrl === undefined ? {} : { sourceUrl }),
     ...(canonicalUrl === undefined ? {} : { canonicalUrl }),

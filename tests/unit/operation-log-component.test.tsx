@@ -49,7 +49,9 @@ describe('OperationLog', () => {
   });
 
   it('一次最多展开一条，并在复制失败时给出反馈', async () => {
-    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('clipboard unavailable'));
+    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(
+      new Error('clipboard unavailable')
+    );
     const secondEntry = { ...detailedEntry, id: 'log-2', displayTitle: '第二条标题' };
 
     render(<OperationLog entries={[detailedEntry, secondEntry]} />);
@@ -69,6 +71,31 @@ describe('OperationLog', () => {
     fireEvent.click(screen.getByRole('button', { name: '复制最终规范链接' }));
 
     expect(await screen.findByText('最终规范链接复制失败，请手动选择链接')).toBeVisible();
+  });
+
+  it('旧记录的 ID 重复时也只展开被点击的一条', () => {
+    const firstEntry: OperationLogEntry = {
+      ...detailedEntry,
+      id: '[资源标识已脱敏]',
+      displayTitle: '第一条登录检查',
+      details: { result: '第一条执行结果' }
+    };
+    const secondEntry: OperationLogEntry = {
+      ...detailedEntry,
+      id: '[资源标识已脱敏]',
+      displayTitle: '第二条登录检查',
+      details: { result: '第二条执行结果' }
+    };
+
+    render(<OperationLog entries={[firstEntry, secondEntry]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /第一条登录检查/u }));
+    expect(screen.getByText('第一条执行结果')).toBeVisible();
+    expect(screen.queryByText('第二条执行结果')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /第二条登录检查/u }));
+    expect(screen.queryByText('第一条执行结果')).not.toBeInTheDocument();
+    expect(screen.getByText('第二条执行结果')).toBeVisible();
   });
 
   it('为两个不同链接分别复制和打开，并提供独立反馈', async () => {
