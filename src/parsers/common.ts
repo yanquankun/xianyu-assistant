@@ -9,6 +9,7 @@ import { parseProductIdentity } from '../domain/product-url';
 import { createEvidenceSet, mergeEvidenceSets, type EvidenceContext } from './evidence';
 import { collectGenericEvidence } from './generic';
 import { collectJdEvidence } from './jd';
+import { createOpenTypeGlyphResolver } from './jd-price-font';
 import { mergeProductEvidence } from './merge';
 import { collectTaobaoEvidence } from './taobao';
 
@@ -21,6 +22,12 @@ const PAGE_ERROR_PATTERNS = [
 const VERIFICATION_PATTERN = /(?:登录|验证码|安全验证|风险验证|访问验证|captcha|verify)/iu;
 const VERIFICATION_BODY_PATTERN =
   /(?:请输入验证码|完成安全验证|访问风险[^\n]{0,40}完成验证|扫码登录|captcha|verify)/iu;
+
+export interface ProductParserDependencies {
+  fetch: typeof fetch;
+}
+
+const DEFAULT_DEPENDENCIES: ProductParserDependencies = { fetch: globalThis.fetch };
 
 function detectExplicitHttpStatus(value: string): string | undefined {
   const explicitStatus = /\bHTTP(?:\s+Status)?\s+(400|403|404|500)\b/iu.exec(value)?.[1];
@@ -100,7 +107,8 @@ function withHintedTitle(
 
 export async function parseProductDocument(
   document: Document,
-  pageUrl: string
+  pageUrl: string,
+  dependencies: ProductParserDependencies = DEFAULT_DEPENDENCIES
 ): Promise<ParsedProduct> {
   const pageError = detectProductPageError(document, pageUrl);
   if (pageError !== null) {
@@ -119,7 +127,9 @@ export async function parseProductDocument(
     normalized.platform === 'taobao' || normalized.platform === 'tmall'
       ? collectTaobaoEvidence(document, context)
       : normalized.platform === 'jd'
-        ? await collectJdEvidence(document, context)
+        ? await collectJdEvidence(document, context, {
+            loadPriceFont: (fontUrl) => createOpenTypeGlyphResolver(fontUrl, dependencies.fetch)
+          })
         : createEvidenceSet();
   return mergeProductEvidence(mergeEvidenceSets(generic, platformEvidence), context);
 }
@@ -127,12 +137,13 @@ export async function parseProductDocument(
 export async function extractProductDocument(
   document: Document,
   pageUrl: string,
-  hintedTitle?: string
+  hintedTitle?: string,
+  dependencies: ProductParserDependencies = DEFAULT_DEPENDENCIES
 ): Promise<ProductExtractionResponse> {
   const pageError = detectProductPageError(document, pageUrl);
   if (pageError !== null) {
     return { ok: false, error: pageError };
   }
-  const product = await parseProductDocument(document, pageUrl);
+  const product = await parseProductDocument(document, pageUrl, dependencies);
   return { ok: true, product: withHintedTitle(product, pageUrl, hintedTitle) };
 }

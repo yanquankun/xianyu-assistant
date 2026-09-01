@@ -11,6 +11,7 @@ import {
 } from '../../src/parsers/common';
 import { createEvidenceSet } from '../../src/parsers/evidence';
 import { collectGenericEvidence } from '../../src/parsers/generic';
+import { collectJdEvidence } from '../../src/parsers/jd';
 import { mergeProductEvidence } from '../../src/parsers/merge';
 
 function parseFixture(name: string, pageUrl: string) {
@@ -214,6 +215,94 @@ describe('field-level product evidence', () => {
 });
 
 describe('parseProductDocument', () => {
+  it('从京东移动页内嵌状态解析当前商品、动态价格和有序图库', async () => {
+    const html = readFileSync(
+      resolve(process.cwd(), 'tests', 'fixtures', 'jd-mobile-product.html'),
+      'utf8'
+    );
+    const document = new DOMParser().parseFromString(html, 'text/html');
+    const names = new Map([
+      ['\uE184', 'one'],
+      ['\uEE94', 'eight'],
+      ['\uE1AF', 'zero']
+    ]);
+    const context = {
+      platform: 'jd' as const,
+      pageUrl: 'https://item.m.jd.com/product/100.html',
+      productId: '100',
+      skuId: '100'
+    };
+
+    const jdEvidence = await collectJdEvidence(document, context, {
+      loadPriceFont: (fontUrl) => {
+        expect(fontUrl).toBe('https://spider-font-oss.360buyimg.com/test-price.otf');
+        return Promise.resolve({ glyphNameFor: (character) => names.get(character) });
+      }
+    });
+    const result = mergeProductEvidence(jdEvidence, context);
+
+    expect(result).toMatchObject({
+      title: '京东当前商品',
+      description: '',
+      price: 1881,
+      originalPrice: 2090
+    });
+    expect(result.warnings).toContain('当前售价为到手价，请发布前核对适用条件');
+    expect(result.images.map(getRemoteImageUrl)).toEqual([
+      'https://img10.360buyimg.com/n1/jfs/a.jpg',
+      'https://img10.360buyimg.com/n1/jfs/b.jpg'
+    ]);
+    expect(JSON.stringify(result)).not.toContain('video-cover');
+  });
+
+  it('京东内嵌商品标识冲突时放弃所有平台专用字段', async () => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html><script>
+        window._itemOnly = ({"item":{"skuId":"100","skuName":"错误标题","image":["jfs/a.jpg"]}});
+        window._itemInfo = ({"stock":{"skuId":"200","realSkuId":"200"}});
+      </script><ul id="loopImgUl"><li><img back_src="https://img10.360buyimg.com/n1/jfs/a.jpg" /></li></ul>`,
+      'text/html'
+    );
+
+    const evidence = await collectJdEvidence(
+      document,
+      {
+        platform: 'jd',
+        pageUrl: 'https://item.m.jd.com/product/100.html',
+        productId: '100'
+      },
+      { loadPriceFont: () => Promise.reject(new Error('不应加载字体')) }
+    );
+
+    expect(evidence.titles).toEqual([]);
+    expect(evidence.prices).toEqual([]);
+    expect(evidence.images).toEqual([]);
+    expect(evidence.warnings).toEqual(['京东页面商品标识不一致，已放弃平台专用字段']);
+  });
+
+  it('京东动态字体无法解码时售价保持为空且不把原价冒充售价', async () => {
+    const html = readFileSync(
+      resolve(process.cwd(), 'tests', 'fixtures', 'jd-mobile-product.html'),
+      'utf8'
+    );
+    const document = new DOMParser().parseFromString(html, 'text/html');
+    const context = {
+      platform: 'jd' as const,
+      pageUrl: 'https://item.m.jd.com/product/100.html',
+      productId: '100',
+      skuId: '100'
+    };
+
+    const evidence = await collectJdEvidence(document, context, {
+      loadPriceFont: () => Promise.reject(new Error('字体损坏'))
+    });
+    const result = mergeProductEvidence(evidence, context);
+
+    expect(result.price).toBeNull();
+    expect(result.originalPrice).toBeUndefined();
+    expect(result.warnings).toContain('京东价格使用动态字体且无法可靠解码，请手动填写售价');
+  });
+
   it('从淘宝夹具合并结构化标题、价格和图片', async () => {
     const result = await parseFixture(
       'taobao-product.html',
