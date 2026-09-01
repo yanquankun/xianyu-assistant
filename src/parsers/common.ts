@@ -5,7 +5,9 @@ import type {
   ProductExtractionResponse,
   ProductPlatform
 } from '../domain/product';
+import type { ProductPageReadiness } from '../domain/product-readiness';
 import { parseProductIdentity } from '../domain/product-url';
+import { extractAssignedJsonObject } from './embedded-json';
 import { createEvidenceSet, mergeEvidenceSets, type EvidenceContext } from './evidence';
 import { collectGenericEvidence } from './generic';
 import { collectJdEvidence } from './jd';
@@ -80,6 +82,112 @@ function isKnownProductRoute(platform: ProductPlatform, pageUrl: string): boolea
       (url.hostname.toLowerCase() === 'item.jd.com' && /^\/[^/]+\.html$/u.test(pathname));
   }
   return (platform === 'taobao' || platform === 'tmall') && pathname === '/item.htm';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasProductType(value: unknown, depth = 0): boolean {
+  if (depth > 20) {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasProductType(entry, depth + 1));
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  const type = value['@type'];
+  if (
+    type === 'Product' ||
+    (Array.isArray(type) && type.some((entry) => entry === 'Product'))
+  ) {
+    return true;
+  }
+  return Object.values(value).some((entry) => hasProductType(entry, depth + 1));
+}
+
+function hasJsonLdProduct(document: Document): boolean {
+  for (const script of document.querySelectorAll<HTMLScriptElement>(
+    'script[type="application/ld+json"]'
+  )) {
+    try {
+      if (hasProductType(JSON.parse(script.textContent))) {
+        return true;
+      }
+    } catch {
+      // A partial JSON-LD block means the page is still waiting, not ready.
+    }
+  }
+  return false;
+}
+
+function hasPlatformProductMarker(document: Document, platform: ProductPlatform): boolean {
+  const selector =
+    platform === 'taobao'
+      ? '[data-title="product-title"], [data-price-region="product"], [data-product-gallery="taobao"]'
+      : platform === 'tmall'
+        ? '#J_DetailMeta h1[data-spm="1000983"], #J_PromoPrice, #J_UlThumb'
+        : platform === 'jd'
+          ? '.sku-name, #main_price, #loopImgUl'
+          : null;
+  return selector !== null && document.querySelector(selector) !== null;
+}
+
+function hasStrictEmbeddedProductState(
+  document: Document,
+  platform: ProductPlatform,
+  productId: string
+): boolean {
+  if (platform !== 'jd') {
+    return false;
+  }
+  for (const script of document.querySelectorAll<HTMLScriptElement>('script')) {
+    for (const variableName of ['window._itemOnly', 'window._itemInfo'] as const) {
+      try {
+        const state = extractAssignedJsonObject(script.textContent, variableName);
+        if (state === null) {
+          continue;
+        }
+        const item = isRecord(state.item) ? state.item : null;
+        const stateProductId = item?.skuId;
+        if (
+          (typeof stateProductId === 'string' || typeof stateProductId === 'number') &&
+          String(stateProductId) !== productId
+        ) {
+          continue;
+        }
+        return true;
+      } catch {
+        // A partial or malformed assignment is not considered ready.
+      }
+    }
+  }
+  return false;
+}
+
+export function checkProductPageReadiness(
+  document: Document,
+  pageUrl: string
+): ProductPageReadiness {
+  const pageError = detectProductPageError(document, pageUrl);
+  if (pageError !== null) {
+    return { state: 'failed', message: pageError.message, code: pageError.code ?? 'PAGE_ERROR' };
+  }
+  const normalized = normalizeHttpUrl(pageUrl);
+  const identity = parseProductIdentity(normalized.url);
+  if (identity === null) {
+    return { state: 'waiting' };
+  }
+  if (
+    hasJsonLdProduct(document) ||
+    hasPlatformProductMarker(document, identity.platform) ||
+    hasStrictEmbeddedProductState(document, identity.platform, identity.productId)
+  ) {
+    return { state: 'ready' };
+  }
+  return { state: 'waiting' };
 }
 
 function withHintedTitle(

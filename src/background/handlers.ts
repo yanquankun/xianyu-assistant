@@ -3,13 +3,18 @@ import { checkXianyuLoginFromTabs } from './login-check';
 import { createFailureLogEntry, createSuccessLogEntry } from './operation-log-factory';
 import { normalizeHttpUrl } from './permissions';
 import {
+  isProductPageReadiness,
+  waitForProductPageReady
+} from './product-readiness';
+import { withResolvedProductTab } from './product-tab-orchestrator';
+import {
   waitForTabSettled,
   type SettledBrowserTab,
   type TabRemovedListener,
   type TabSettledDependencies,
   type TabUpdatedListener
 } from './tab-settle';
-import { selectXianyuLoginTab, selectXianyuTab, withSourceTab, type BrowserTab } from './tabs';
+import { selectXianyuLoginTab, selectXianyuTab, type BrowserTab } from './tabs';
 import type { AppError, AppErrorCode, OperationResult } from '../domain/errors';
 import {
   parseProductExtractionResponse,
@@ -234,11 +239,24 @@ function xianyuContentDependencies(): XianyuContentDependencies {
   };
 }
 
-async function extractProductFromTab(tabId: number, hintedTitle?: string): Promise<ParsedProduct> {
+async function prepareProductExtractor(tabId: number): Promise<void> {
   await browser.scripting.executeScript({
     target: { tabId },
     files: ['/product-extractor.js']
   });
+}
+
+async function readProductPageReadiness(tabId: number) {
+  const response: unknown = await browser.tabs.sendMessage(tabId, {
+    type: 'CHECK_PRODUCT_PAGE_READINESS'
+  });
+  if (!isProductPageReadiness(response)) {
+    throw new Error('商品页面就绪状态格式无效');
+  }
+  return response;
+}
+
+async function extractProductFromTab(tabId: number, hintedTitle?: string): Promise<ParsedProduct> {
   const response: unknown = await browser.tabs.sendMessage(tabId, {
     type: 'EXTRACT_PRODUCT_DOCUMENT',
     ...(hintedTitle === undefined ? {} : { hintedTitle })
@@ -257,9 +275,9 @@ async function parseProduct(
   message: Extract<RuntimeMessage, { type: 'PARSE_PRODUCT' }>
 ): Promise<ParsedProduct> {
   const normalized = normalizeHttpUrl(message.url);
-  const tabs = await listTabs();
-  return withSourceTab(
+  return withResolvedProductTab(
     {
+      listTabs,
       async create(url, active): Promise<BrowserTab> {
         const tab = await browser.tabs.create({ url, active });
         const mapped = toBrowserTab(tab);
@@ -268,26 +286,23 @@ async function parseProduct(
         }
         return mapped;
       },
-      remove: (tabId) => browser.tabs.remove(tabId)
+      remove: (tabId) => browser.tabs.remove(tabId),
+      waitForSettled: (tabId, submittedUrl) =>
+        waitForTabSettled(tabSettleDependencies(), tabId, submittedUrl, {
+          quietMs: 800,
+          timeoutMs: TAB_LOAD_TIMEOUT_MS
+        }),
+      prepare: prepareProductExtractor,
+      waitForReady: (tabId) =>
+        waitForProductPageReady(() => readProductPageReadiness(tabId))
     },
-    tabs,
     normalized.href,
-    async (sourceTab) => {
-      const settled = await waitForTabSettled(
-        tabSettleDependencies(),
-        sourceTab.id,
-        normalized.href,
-        { quietMs: 800, timeoutMs: TAB_LOAD_TIMEOUT_MS }
-      );
-      if (settled.url === undefined) {
-        throw new Error('无法读取商品页地址');
-      }
-      const canonicalUrl = normalizeHttpUrl(settled.url).href;
-      const product = await extractProductFromTab(sourceTab.id, message.hintedTitle);
+    async (tabId, identity) => {
+      const product = await extractProductFromTab(tabId, message.hintedTitle);
       return {
         ...product,
         submittedUrl: message.submittedUrl,
-        canonicalUrl
+        canonicalUrl: identity.canonicalUrl
       };
     }
   );

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import { parseProductIdentity } from '../../src/domain/product-url';
 import {
-  selectSourceTab,
+  selectProductSourceTab,
   selectXianyuLoginTab,
   selectXianyuTab,
   withTemporaryTab,
@@ -14,16 +15,47 @@ const tabs: BrowserTab[] = [
   { id: 3, url: 'https://item.jd.com/1.html#detail', active: false, windowId: 7 }
 ];
 
-describe('selectSourceTab', () => {
-  it('复用规范 URL 相同的商品标签页', () => {
-    expect(selectSourceTab(tabs, 'https://item.jd.com/1.html')).toEqual({
+describe('selectProductSourceTab', () => {
+  it('忽略移动端域名、跟踪参数和 hash，按商品身份复用标签页', () => {
+    const identity = parseProductIdentity(
+      'https://item.m.jd.com/product/1.html?utm_source=share#detail'
+    );
+    if (identity === null) {
+      throw new Error('测试商品身份无效');
+    }
+
+    expect(selectProductSourceTab(tabs, identity)).toEqual({
       kind: 'reuse',
       tabId: 3
     });
   });
 
-  it('没有相同标签页时要求创建临时标签页', () => {
-    expect(selectSourceTab(tabs, 'https://item.jd.com/2.html')).toEqual({ kind: 'create' });
+  it('SKU 明确冲突时不复用同一商品的其他规格标签页', () => {
+    const identity = parseProductIdentity(
+      'https://detail.tmall.com/item.htm?id=100&skuId=3'
+    );
+    if (identity === null) {
+      throw new Error('测试商品身份无效');
+    }
+    const tmallTabs: BrowserTab[] = [
+      {
+        id: 8,
+        url: 'https://detail.tmall.com/item.htm?id=100&skuId=2&spm=share',
+        active: false,
+        windowId: 7
+      }
+    ];
+
+    expect(selectProductSourceTab(tmallTabs, identity)).toEqual({ kind: 'create' });
+  });
+
+  it('可排除扩展刚创建的临时标签页', () => {
+    const identity = parseProductIdentity('https://item.jd.com/1.html');
+    if (identity === null) {
+      throw new Error('测试商品身份无效');
+    }
+
+    expect(selectProductSourceTab(tabs, identity, 3)).toEqual({ kind: 'create' });
   });
 });
 

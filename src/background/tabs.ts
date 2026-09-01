@@ -1,3 +1,9 @@
+import {
+  parseProductIdentity,
+  sameProductIdentity,
+  type ProductIdentity
+} from '../domain/product-url';
+
 export interface BrowserTab {
   id: number;
   url?: string;
@@ -56,6 +62,21 @@ export function selectSourceTab(
     return { kind: 'create' };
   }
   const existing = tabs.find((tab) => tab.url !== undefined && comparableUrl(tab.url) === target);
+  return existing === undefined ? { kind: 'create' } : { kind: 'reuse', tabId: existing.id };
+}
+
+export function selectProductSourceTab(
+  tabs: readonly BrowserTab[],
+  targetIdentity: ProductIdentity,
+  excludedTabId?: number
+): SourceTabSelection {
+  const existing = tabs.find((tab) => {
+    if (tab.id === excludedTabId || tab.url === undefined) {
+      return false;
+    }
+    const tabIdentity = parseProductIdentity(tab.url);
+    return tabIdentity !== null && sameProductIdentity(tabIdentity, targetIdentity);
+  });
   return existing === undefined ? { kind: 'create' } : { kind: 'reuse', tabId: existing.id };
 }
 
