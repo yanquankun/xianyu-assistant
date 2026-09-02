@@ -1,4 +1,5 @@
 import type { AiSettings } from './settings';
+import { SHIPPING_METHODS } from './product';
 import type {
   ParsedProduct,
   ProductExtractionResponse,
@@ -66,6 +67,10 @@ function isNullablePrice(value: unknown): value is number | null {
 
 function isOptionalPrice(value: unknown): value is number | undefined {
   return value === undefined || (isFiniteNumber(value) && value > 0);
+}
+
+function isShippingMethod(value: unknown): value is ProductDraft['shippingMethod'] {
+  return SHIPPING_METHODS.some((method) => method === value);
 }
 
 function isStringArray(value: unknown, maximum: number): value is string[] {
@@ -196,7 +201,11 @@ export function isProductDraft(value: unknown): value is ProductDraft {
     isStringArray(value.warnings, 100) &&
     typeof value.confidence === 'string' &&
     ['high', 'medium', 'low'].includes(value.confidence) &&
-    isText(value.shippingMethod, 100) &&
+    isShippingMethod(value.shippingMethod) &&
+    (value.shippingMethod === '一口价'
+      ? isOptionalPrice(value.shippingFee) && value.shippingFee !== undefined
+      : value.shippingFee === undefined) &&
+    typeof value.supportsPickup === 'boolean' &&
     isText(value.categoryNote, 1_000) &&
     isText(value.updatedAt, 100, false)
   );
@@ -257,23 +266,38 @@ function migrateStoredPlatform(draft: ProductDraft): StoredDraftParseResult {
 }
 
 export function parseStoredProductDraft(value: unknown): StoredDraftParseResult | null {
-  if (isProductDraft(value)) {
-    return migrateStoredPlatform(value);
+  let deliveryMigrated = false;
+  let normalizedValue = value;
+  if (isRecord(value)) {
+    const shippingMethod =
+      value.shippingMethod === '邮费另议' ? '按距离计费' : value.shippingMethod;
+    const supportsPickup = typeof value.supportsPickup === 'boolean' ? value.supportsPickup : false;
+    deliveryMigrated =
+      shippingMethod !== value.shippingMethod || value.supportsPickup === undefined;
+    normalizedValue = { ...value, shippingMethod, supportsPickup };
   }
-  if (!isRecord(value) || !Array.isArray(value.images)) {
+  if (isProductDraft(normalizedValue)) {
+    const platformResult = migrateStoredPlatform(normalizedValue);
+    return {
+      draft: platformResult.draft,
+      migrated: deliveryMigrated || platformResult.migrated
+    };
+  }
+  if (!isRecord(normalizedValue) || !Array.isArray(normalizedValue.images)) {
     return null;
   }
-  const oldVideo = isProductVideo(value.video) ? value.video : null;
-  const storedVideos = Array.isArray(value.videos)
-    ? value.videos.filter(isProductVideo).slice(0, MAX_MEDIA_COUNT)
+  const oldVideo = isProductVideo(normalizedValue.video) ? normalizedValue.video : null;
+  const storedVideos = Array.isArray(normalizedValue.videos)
+    ? normalizedValue.videos.filter(isProductVideo).slice(0, MAX_MEDIA_COUNT)
     : oldVideo === null
       ? []
       : [oldVideo];
   const images: ProductImage[] = [];
   let removedImage = false;
-  let migrated = value.videos === undefined || value.video !== undefined;
+  let migrated =
+    deliveryMigrated || normalizedValue.videos === undefined || normalizedValue.video !== undefined;
   const availableImageSlots = MAX_MEDIA_COUNT - storedVideos.length;
-  for (const image of value.images) {
+  for (const image of normalizedValue.images) {
     if (images.length >= availableImageSlots) {
       removedImage = true;
       continue;
@@ -290,7 +314,9 @@ export function parseStoredProductDraft(value: unknown): StoredDraftParseResult 
     images.push(legacyImage);
     migrated = true;
   }
-  const warnings = isStringArray(value.warnings, 100) ? [...value.warnings] : null;
+  const warnings = isStringArray(normalizedValue.warnings, 100)
+    ? [...normalizedValue.warnings]
+    : null;
   if (warnings === null) {
     return null;
   }
@@ -300,7 +326,12 @@ export function parseStoredProductDraft(value: unknown): StoredDraftParseResult 
     }
     warnings.push('已移除无法恢复的旧版图片');
   }
-  const candidate: Record<string, unknown> = { ...value, images, videos: storedVideos, warnings };
+  const candidate: Record<string, unknown> = {
+    ...normalizedValue,
+    images,
+    videos: storedVideos,
+    warnings
+  };
   delete candidate.video;
   if (!isProductDraft(candidate)) {
     return null;

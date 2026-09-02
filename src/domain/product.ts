@@ -2,15 +2,14 @@ export type ProductPlatform = 'taobao' | 'tmall' | 'jd' | 'generic';
 
 export type ExtractionConfidence = 'high' | 'medium' | 'low';
 
+export const SHIPPING_METHODS = ['包邮', '按距离计费', '一口价', '无需邮寄'] as const;
+
+export type ShippingMethod = (typeof SHIPPING_METHODS)[number];
+
 export type ImageLoadStatus = 'idle' | 'loaded' | 'failed';
 
 export type RemoteImageExtractionSource =
-  | 'json-ld'
-  | 'open-graph'
-  | 'meta'
-  | 'semantic-dom'
-  | 'embedded-state'
-  | 'platform-gallery';
+  'json-ld' | 'open-graph' | 'meta' | 'semantic-dom' | 'embedded-state' | 'platform-gallery';
 
 export type ProductImageLocation =
   | {
@@ -68,7 +67,9 @@ export interface ProductDraft {
   videos: ProductVideo[];
   warnings: string[];
   confidence: ExtractionConfidence;
-  shippingMethod: string;
+  shippingMethod: ShippingMethod;
+  shippingFee?: number;
+  supportsPickup: boolean;
   categoryNote: string;
   updatedAt: string;
 }

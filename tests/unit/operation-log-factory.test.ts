@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createAiPolishFailureLogEntry,
+  createAiPolishSuccessLogEntry,
   createFailureLogEntry,
   createSuccessLogEntry
 } from '../../src/background/operation-log-factory';
@@ -57,11 +59,53 @@ const draft: ProductDraft = {
   warnings: ['请核对规格'],
   confidence: 'high',
   shippingMethod: '包邮',
+  supportsPickup: false,
   categoryNote: '分类备注',
   updatedAt: '2026-08-31T14:00:00.000Z'
 };
 
 describe('operation log factory', () => {
+  it('AI 润色日志保留原标题和生成后的描述，但不记录密钥', () => {
+    const entry = createAiPolishSuccessLogEntry(
+      draft,
+      { description: '润色后的商品描述', factWarnings: ['请核对数字'] },
+      'polish-log',
+      '2026-09-02T10:00:00.000Z'
+    );
+
+    expect(entry).toMatchObject({
+      stage: 'ai',
+      outcome: 'success',
+      displayTitle: '输入标题',
+      operationLabel: 'AI 润色',
+      details: {
+        draft: { title: '输入标题', description: '润色后的商品描述' },
+        warnings: ['请核对数字'],
+        result: 'AI 商品描述已生成'
+      }
+    });
+    expect(JSON.stringify(entry)).not.toMatch(/settings-secret|asset-secret|video-asset-secret/u);
+  });
+
+  it('AI 润色失败日志脱敏接口错误并保留原草稿快照', () => {
+    const entry = createAiPolishFailureLogEntry(
+      draft,
+      'Authorization: Bearer error-secret',
+      'AI_NETWORK_ERROR',
+      'polish-failure-log',
+      '2026-09-02T10:01:00.000Z'
+    );
+
+    expect(entry).toMatchObject({
+      stage: 'ai',
+      outcome: 'failure',
+      displayTitle: '输入标题',
+      operationLabel: 'AI 润色',
+      details: { draft: { description: '输入描述' }, error: 'Authorization: [已脱敏]' }
+    });
+    expect(JSON.stringify(entry)).not.toContain('error-secret');
+  });
+
   it('解析成功日志只保留字段完成度和规范 URL', () => {
     const sourceTitle = '不得写入日志的来源标题';
     const sourceDescription = '不得写入日志的来源描述';
@@ -105,6 +149,7 @@ describe('operation log factory', () => {
     expect(entry.details?.source).toEqual({
       platform: 'jd',
       canonicalUrl: 'https://item.jd.com/product/1.html',
+      imageUrls: ['https://img.example.com/source.jpg'],
       fields: {
         title: true,
         description: true,
@@ -114,7 +159,9 @@ describe('operation log factory', () => {
       }
     });
     const serialized = JSON.stringify(entry);
-    expect(serialized).not.toMatch(/分享标题|不得写入日志的来源标题|不得写入日志的来源描述|@code@/u);
+    expect(serialized).not.toMatch(
+      /分享标题|不得写入日志的来源标题|不得写入日志的来源描述|@code@/u
+    );
   });
 
   it('AI 成功记录使用生成标题并保存不可变表单快照', () => {
@@ -148,6 +195,7 @@ describe('operation log factory', () => {
           price: 88,
           originalPrice: 99,
           shippingMethod: '包邮',
+          supportsPickup: false,
           categoryNote: '分类备注',
           selectedImageCount: 1,
           videoName: 'local-video.mp4'
@@ -210,5 +258,44 @@ describe('operation log factory', () => {
     expect(serialized).not.toContain(assetId);
     expect(serialized).not.toContain(`local-${assetId}`);
     expect(entry.details?.warnings).toContain('图片 1：本地图片不存在或已被删除');
+  });
+
+  it('填表日志使用中文字段名并保留邮费与自提快照', () => {
+    const entry = createSuccessLogEntry(
+      {
+        type: 'FILL_XIANYU_DRAFT',
+        draft: {
+          ...draft,
+          shippingMethod: '一口价',
+          shippingFee: 12,
+          supportsPickup: true
+        }
+      },
+      {
+        filled: [
+          'title',
+          'price',
+          'originalPrice',
+          'description',
+          'shippingMethod',
+          'shippingFee',
+          'supportsPickup',
+          'images'
+        ],
+        skipped: [],
+        warnings: []
+      },
+      'fill-delivery-log',
+      '2026-09-02T10:00:00.000Z'
+    );
+
+    expect(entry.details?.draft).toMatchObject({
+      shippingMethod: '一口价',
+      shippingFee: 12,
+      supportsPickup: true
+    });
+    expect(entry.details?.result).toBe(
+      '已填入：标题、售价、原价、描述、发货方式、邮费金额、支持自提、商品图片'
+    );
   });
 });

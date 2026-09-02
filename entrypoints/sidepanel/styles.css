@@ -91,6 +91,12 @@ button:disabled {
   font-size: 0.75rem;
 }
 
+.brand-copy .brand-version {
+  margin-inline-start: 0.3rem;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
 .view-tabs {
   position: sticky;
   top: 0;
@@ -263,6 +269,56 @@ button:disabled {
   line-height: 1.55;
 }
 
+.description-input-frame {
+  position: relative;
+  width: 100%;
+}
+
+.description-input-frame textarea {
+  display: block;
+}
+
+.description-polish-overlay {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.38rem;
+  background: transparent;
+  pointer-events: none;
+}
+
+.description-polish-overlay--typing {
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 0.5rem;
+}
+
+.description-polish-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.7rem;
+  border: 0.0625rem solid rgb(199 166 0 / 24%);
+  border-radius: 1rem;
+  background: rgb(255 255 255 / 90%);
+  box-shadow: 0 0.18rem 0.65rem rgb(32 33 36 / 12%);
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.description-polish-spinner {
+  width: 1.05rem;
+  height: 1.05rem;
+  border: 0.125rem solid rgb(199 166 0 / 24%);
+  border-block-start-color: var(--yellow-strong);
+  border-radius: 50%;
+  animation: media-preview-spin 0.75s linear infinite;
+}
+
 .field input:focus,
 .field textarea:focus,
 .field select:focus,
@@ -400,6 +456,16 @@ button:disabled {
   border-color: #cfd2d6;
   background: var(--surface);
   color: var(--ink);
+}
+
+.button--stop {
+  border-color: #c74438;
+  background: #fff7f6;
+  color: var(--danger);
+}
+
+.button--stop:not(:disabled):hover {
+  background: #fde9e7;
 }
 
 .button--quiet {
@@ -695,7 +761,7 @@ button:disabled {
   list-style: none;
 }
 
-.log-list li {
+.log-list > li {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 0.6rem;

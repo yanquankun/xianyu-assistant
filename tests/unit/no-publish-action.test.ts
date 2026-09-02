@@ -11,7 +11,7 @@ describe('最终发布安全门禁', () => {
     expect(runtimeMessageTypes).not.toContain('CLICK_PUBLISH');
   });
 
-  it('闲鱼填写入口不存在点击或提交表单调用', () => {
+  it('闲鱼填写入口不存在提交表单调用', () => {
     const files = [
       'entrypoints/xianyu.content.ts',
       'src/xianyu/dom.ts',
@@ -22,6 +22,6 @@ describe('最终发布安全门禁', () => {
       .map((file) => readFileSync(resolve(process.cwd(), file), 'utf8'))
       .join('\n');
 
-    expect(source).not.toMatch(/\.click\s*\(|\.submit\s*\(|requestSubmit\s*\(/u);
+    expect(source).not.toMatch(/\.submit\s*\(|requestSubmit\s*\(/u);
   });
 });

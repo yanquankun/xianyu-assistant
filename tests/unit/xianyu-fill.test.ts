@@ -28,6 +28,7 @@ const validPayload: XianyuFillPayload = {
   description: '测试发布描述',
   price: 88.5,
   shippingMethod: '包邮',
+  supportsPickup: false,
   categoryNote: '',
   images: [
     {
@@ -40,14 +41,140 @@ const validPayload: XianyuFillPayload = {
 };
 
 describe('fillXianyuDraft', () => {
-  it('没有图片和视频时仍填写文本且不把媒体记为跳过', async () => {
-    const result = await fillXianyuDraft(publishDocument(), { ...validPayload, images: [] }, []);
+  it('重复填入时只补充新增图片并删除插件草稿中已移除的图片', async () => {
+    const document = publishDocument();
+    const imageInput = document.querySelector<HTMLInputElement>('input[name="images"]');
+    const form = document.querySelector('form');
+    if (imageInput === null || form === null) {
+      throw new Error('测试夹具需要图片输入框和表单');
+    }
+    const list = document.createElement('div');
+    list.className = 'imgList--test';
+    form.insertBefore(list, imageInput.parentElement);
+    list.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || !target.matches('[class*="delete-btn--"]')) {
+        return;
+      }
+      target.closest('[role="button"]')?.remove();
+    });
+    let uploadEvents = 0;
+    imageInput.addEventListener('change', () => {
+      uploadEvents += 1;
+      for (const file of Array.from(imageInput.files ?? [])) {
+        const sortable = document.createElement('div');
+        sortable.setAttribute('role', 'button');
+        const preview = document.createElement('div');
+        preview.className = 'preview-container--test';
+        const remove = document.createElement('div');
+        remove.className = 'delete-btn--test';
+        const contentImage = document.createElement('img');
+        contentImage.src = `https://img.alicdn.com/${file.name}-${String(uploadEvents)}.webp`;
+        contentImage.style.objectFit = 'contain';
+        contentImage.style.display = 'block';
+        preview.append(remove, contentImage, document.createTextNode(file.name));
+        sortable.append(preview);
+        list.append(sortable);
+      }
+    });
+    const secondImage = {
+      id: 'image-2',
+      name: 'image-2.png',
+      mimeType: 'image/png',
+      dataBase64: 'dHdv'
+    } as const;
+    const twoImages = { ...validPayload, images: [...validPayload.images, secondImage] };
 
-    expect(result.filled).toEqual(expect.arrayContaining(['title', 'price', 'description']));
-    expect(result.skipped).toEqual([]);
+    await fillXianyuDraft(document, twoImages);
+
+    // 闲鱼上传完成后会由 React 替换预览节点，外部写入的 data-* 属性不会保留。
+    for (const item of list.querySelectorAll<HTMLElement>('[class*="preview-container--"]')) {
+      const replacement = item.cloneNode(true) as HTMLElement;
+      replacement.removeAttribute('data-xianyu-assistant-image-id');
+      item.replaceWith(replacement);
+    }
+
+    await fillXianyuDraft(document, twoImages);
+
+    expect(uploadEvents).toBe(1);
+    expect(list.querySelectorAll('[class*="preview-container--"]')).toHaveLength(2);
+
+    await fillXianyuDraft(document, { ...validPayload, images: [secondImage] });
+
+    expect(uploadEvents).toBe(1);
+    expect(list.querySelectorAll('[class*="preview-container--"]')).toHaveLength(1);
+    expect(list.textContent).toContain('image-2.png');
   });
 
-  it('一次把多个视频写入视频文件输入框', async () => {
+  it('闲鱼网页不支持视频时不再写入视频文件输入框', async () => {
+    const document = publishDocument();
+
+    const result = await fillXianyuDraft(document, validPayload, [
+      new File(['video'], 'demo.mp4', { type: 'video/mp4' })
+    ]);
+
+    expect(document.querySelector<HTMLInputElement>('input[name="video"]')?.files).toHaveLength(0);
+    expect(result.filled).not.toContain('video');
+  });
+
+  it('跨上下文填表消息要求至少一张图片', () => {
+    expect(isXianyuFillPayload({ ...validPayload, images: [] })).toBe(false);
+  });
+
+  it('适配真实闲鱼价格、原价、发货方式、自提开关和隐藏图片控件', async () => {
+    const document = new DOMParser().parseFromString(
+      `<!doctype html><html><body>
+        <label>标题<input name="title"></label>
+        <div contenteditable="true"></div>
+        <div class="ant-form-item"><label title="价格">价格</label><input type="text" placeholder="0.00"></div>
+        <div class="ant-form-item"><label title="原价">原价</label><input type="text" placeholder="0.00"></div>
+        <label><input type="radio" value="0">包邮</label>
+        <label><input type="radio" value="1">按距离计费</label>
+        <label><input type="radio" value="2">一口价</label>
+        <label><input type="radio" value="3">无需邮寄</label>
+        <span>支持自提</span><button type="button" role="switch" aria-checked="false"></button>
+        <div class="ant-form-item"><label title="邮费">邮费</label><input type="text" placeholder="0.00"></div>
+        <input name="file" type="file" accept="image/png, image/jpg, image/jpeg, image/heic, image/webp" multiple style="display: none;">
+      </body></html>`,
+      'text/html'
+    );
+    const pickupSwitch = document.querySelector<HTMLButtonElement>('[role="switch"]');
+    pickupSwitch?.addEventListener('click', () =>
+      pickupSwitch.setAttribute('aria-checked', 'true')
+    );
+
+    const payload = {
+      ...validPayload,
+      originalPrice: 109,
+      shippingMethod: '一口价',
+      shippingFee: 12,
+      supportsPickup: true
+    } as XianyuFillPayload;
+    const result = await fillXianyuDraft(document, payload);
+
+    const amountInputs = document.querySelectorAll<HTMLInputElement>('input[placeholder="0.00"]');
+    expect(Array.from(amountInputs, (input) => input.value)).toEqual(['88.5', '109', '12']);
+    expect(
+      document.querySelector<HTMLInputElement>('input[type="radio"][value="2"]')
+    ).toBeChecked();
+    expect(pickupSwitch).toHaveAttribute('aria-checked', 'true');
+    expect(document.querySelector<HTMLInputElement>('input[name="file"]')?.files).toHaveLength(1);
+    expect(result.filled).toEqual(
+      expect.arrayContaining([
+        'title',
+        'price',
+        'originalPrice',
+        'description',
+        'shippingMethod',
+        'shippingFee',
+        'supportsPickup',
+        'images'
+      ])
+    );
+  });
+
+  // 闲鱼 Web 恢复视频上传能力后重新启用以下视频填入用例。
+  it.skip('一次把多个视频写入视频文件输入框', async () => {
     const document = publishDocument();
     const first = new File(['one'], 'one.mp4', { type: 'video/mp4' });
     const second = new File(['two'], 'two.mov', { type: 'video/quicktime' });
@@ -140,7 +267,7 @@ describe('fillXianyuDraft', () => {
     expect(clicked).toBe(false);
   });
 
-  it('图片与视频使用不同文件输入框且不触发发布', async () => {
+  it.skip('图片与视频使用不同文件输入框且不触发发布', async () => {
     const document = publishDocument();
     const publish = document.querySelector<HTMLButtonElement>('[data-testid="publish"]');
     if (publish === null) {
@@ -162,7 +289,7 @@ describe('fillXianyuDraft', () => {
     expect(publishClicked).toBe(false);
   });
 
-  it('找不到可靠视频控件时保留文本与图片结果并提示手动上传', async () => {
+  it.skip('找不到可靠视频控件时保留文本与图片结果并提示手动上传', async () => {
     const document = publishDocument();
     document.querySelector('input[name="video"]')?.remove();
 
@@ -179,7 +306,7 @@ describe('fillXianyuDraft', () => {
     });
   });
 
-  it('可访问标签能可靠区分没有 name 和 accept 的图片与视频控件', async () => {
+  it.skip('可访问标签能可靠区分没有 name 和 accept 的图片与视频控件', async () => {
     const document = new DOMParser().parseFromString(
       '<!doctype html><html><body><label>图片<input type="file" multiple></label><label>视频<input type="file"></label></body></html>',
       'text/html'
@@ -244,6 +371,8 @@ describe('fillXianyuDraft', () => {
     expect(result.skipped.map((item) => item.field)).toEqual([
       'title',
       'price',
+      'shippingMethod',
+      'supportsPickup',
       'description',
       'images'
     ]);

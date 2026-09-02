@@ -50,6 +50,7 @@ export type WorkflowAction =
       notice?: string;
     }
   | { type: 'VIDEO_REMOVED'; id: string; now: string }
+  | { type: 'AI_POLISH_STATUS_CHANGED'; message: string }
   | { type: 'EXPANSION_STARTED'; draftId: string; draftUpdatedAt: string }
   | {
       type: 'EXPANSION_RECEIVED';
@@ -101,6 +102,7 @@ function createDraft(product: ParsedProduct, id: string, now: string): ProductDr
     warnings: product.warnings,
     confidence: product.confidence,
     shippingMethod: '包邮',
+    supportsPickup: false,
     categoryNote: '',
     updatedAt: now
   };
@@ -126,6 +128,7 @@ export function createManualDraft(id: string, now: string): ProductDraft {
     warnings: [],
     confidence: 'low',
     shippingMethod: '包邮',
+    supportsPickup: false,
     categoryNote: '',
     updatedAt: now
   };
@@ -138,6 +141,8 @@ export function draftNeedsResetConfirmation(draft: ProductDraft): boolean {
     draft.price !== null ||
     draft.originalPrice !== undefined ||
     draft.shippingMethod !== '包邮' ||
+    draft.shippingFee !== undefined ||
+    draft.supportsPickup ||
     draft.categoryNote.trim().length > 0 ||
     draft.canonicalUrl.trim().length > 0 ||
     draft.images.length > 0 ||
@@ -313,6 +318,13 @@ export function reduceWorkflow(state: WorkflowState, action: WorkflowAction): Wo
           updatedAt: action.now
         },
         statusMessage: '视频已移除',
+        errorMessage: null
+      };
+    case 'AI_POLISH_STATUS_CHANGED':
+      return {
+        ...state,
+        phase: 'editing',
+        statusMessage: action.message,
         errorMessage: null
       };
     case 'EXPANSION_STARTED':

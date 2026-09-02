@@ -2,10 +2,7 @@ import { createAiClient } from '../ai/client';
 import { checkXianyuLoginFromTabs } from './login-check';
 import { createFailureLogEntry, createSuccessLogEntry } from './operation-log-factory';
 import { normalizeHttpUrl } from './permissions';
-import {
-  isProductPageReadiness,
-  waitForProductPageReady
-} from './product-readiness';
+import { isProductPageReadiness, waitForProductPageReady } from './product-readiness';
 import { withResolvedProductTab } from './product-tab-orchestrator';
 import {
   waitForTabSettled,
@@ -31,14 +28,20 @@ import {
   prepareImages,
   type FillResult
 } from '../xianyu/fill';
+import { requirePreparedImagesForFill, validateDraftForFill } from '../xianyu/fill-readiness';
 import {
   MEDIA_TRANSFER_PORT_NAME,
   createMediaTransferRegistry,
   isMediaTransferClientRequest,
   isTrustedMediaTransferSender
 } from '../xianyu/media-transfer';
-import { sendXianyuMessage, type XianyuContentDependencies } from '../xianyu/content-ready';
-import type { XianyuLoginCheckResult, XianyuLoginState } from '../xianyu/login';
+import {
+  sendXianyuMessage,
+  waitForXianyuLoginState,
+  type XianyuContentDependencies
+} from '../xianyu/content-ready';
+import { isXianyuVideoUploadEnabled } from '../xianyu/features';
+import type { XianyuLoginCheckResult } from '../xianyu/login';
 import {
   prepareXianyuPublishTab,
   XIANYU_PUBLISH_URL,
@@ -235,6 +238,9 @@ function xianyuContentDependencies(): XianyuContentDependencies {
         target: { tabId },
         files: ['/content-scripts/xianyu.js']
       });
+    },
+    waitForRetry(delayMs): Promise<void> {
+      return new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   };
 }
@@ -293,8 +299,7 @@ async function parseProduct(
           timeoutMs: TAB_LOAD_TIMEOUT_MS
         }),
       prepare: prepareProductExtractor,
-      waitForReady: (tabId) =>
-        waitForProductPageReady(() => readProductPageReadiness(tabId))
+      waitForReady: (tabId) => waitForProductPageReady(() => readProductPageReadiness(tabId))
     },
     normalized.href,
     async (tabId, identity) => {
@@ -321,35 +326,15 @@ async function checkXianyuLogin(): Promise<XianyuLoginCheckResult> {
   });
 }
 
-function validateDraft(draft: ProductDraft): number {
-  if (draft.title.trim().length === 0 || draft.description.trim().length === 0) {
-    throw new Error('请先填写标题和描述');
-  }
-  if (draft.price === null || !Number.isFinite(draft.price) || draft.price <= 0) {
-    throw new Error('请填写有效售价');
-  }
-  if (
-    draft.originalPrice !== undefined &&
-    (!Number.isFinite(draft.originalPrice) || draft.originalPrice <= 0)
-  ) {
-    throw new Error('请填写有效原价，或留空');
-  }
-  if (draft.images.some((image) => image.loadStatus !== 'loaded')) {
-    throw new Error('请等待图片加载完成，或删除加载失败的图片');
-  }
-  return draft.price;
-}
-
 async function fillDraft(draft: ProductDraft): Promise<FillResult> {
-  const price = validateDraft(draft);
+  const price = validateDraftForFill(draft);
   const tabs = await listTabs();
   const activeTabId = (await browser.tabs.query({ active: true, currentWindow: true })).at(0)?.id;
   const existing = selectXianyuTab(tabs, activeTabId);
   if (existing !== null) {
-    const existingLoginState = await sendXianyuMessage<XianyuLoginState>(
+    const existingLoginState = await waitForXianyuLoginState(
       xianyuContentDependencies(),
-      existing.tabId,
-      { type: 'CHECK_XIANYU_LOGIN' }
+      existing.tabId
     );
     if (existingLoginState === 'logged-out') {
       throw new Error('需要登录闲鱼');
@@ -359,11 +344,7 @@ async function fillDraft(draft: ProductDraft): Promise<FillResult> {
     }
   }
   const tab = await prepareXianyuPublishTab(xianyuTabDependencies());
-  const loginState = await sendXianyuMessage<XianyuLoginState>(
-    xianyuContentDependencies(),
-    tab.tabId,
-    { type: 'CHECK_XIANYU_LOGIN' }
-  );
+  const loginState = await waitForXianyuLoginState(xianyuContentDependencies(), tab.tabId);
   if (loginState === 'logged-out') {
     throw new Error('需要登录闲鱼');
   }
@@ -372,15 +353,18 @@ async function fillDraft(draft: ProductDraft): Promise<FillResult> {
   }
 
   const downloaded = await prepareImages(fetch, mediaStore, draft.images);
+  requirePreparedImagesForFill(downloaded);
   const videoTransfers: Awaited<ReturnType<typeof mediaTransferRegistry.create>>[] = [];
   const videoFailures: string[] = [];
-  for (const video of draft.videos) {
-    try {
-      videoTransfers.push(await mediaTransferRegistry.create(video.assetId, tab.tabId));
-    } catch (error) {
-      videoFailures.push(
-        `${video.fileName}：${error instanceof Error ? error.message : '视频传输准备失败'}`
-      );
+  if (isXianyuVideoUploadEnabled()) {
+    for (const video of draft.videos) {
+      try {
+        videoTransfers.push(await mediaTransferRegistry.create(video.assetId, tab.tabId));
+      } catch (error) {
+        videoFailures.push(
+          `${video.fileName}：${error instanceof Error ? error.message : '视频传输准备失败'}`
+        );
+      }
     }
   }
   try {
@@ -392,6 +376,8 @@ async function fillDraft(draft: ProductDraft): Promise<FillResult> {
         price,
         ...(draft.originalPrice === undefined ? {} : { originalPrice: draft.originalPrice }),
         shippingMethod: draft.shippingMethod,
+        ...(draft.shippingFee === undefined ? {} : { shippingFee: draft.shippingFee }),
+        supportsPickup: draft.supportsPickup,
         categoryNote: draft.categoryNote,
         images: downloaded.files,
         ...(videoTransfers.length === 0 ? {} : { videoTransfers })

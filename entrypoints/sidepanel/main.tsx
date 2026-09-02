@@ -13,6 +13,9 @@ if (root === null) {
 
 createRoot(root).render(
   <StrictMode>
-    <App services={createBrowserSidePanelServices()} />
+    <App
+      services={createBrowserSidePanelServices()}
+      appVersion={browser.runtime.getManifest().version}
+    />
   </StrictMode>
 );

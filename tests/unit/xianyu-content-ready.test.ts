@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import type { XianyuLoginState } from '../../src/xianyu/login';
 import {
   sendXianyuMessage,
+  waitForXianyuLoginState,
   type XianyuContentDependencies
 } from '../../src/xianyu/content-ready';
 
@@ -13,11 +15,32 @@ function createDependencies(
     getTabUrl: () => Promise.resolve('https://www.goofish.com/publish'),
     sendMessage: <T>() => Promise.resolve('logged-in' as T),
     inject: () => Promise.resolve(),
+    waitForRetry: () => Promise.resolve(),
     ...overrides
   };
 }
 
 describe('sendXianyuMessage', () => {
+  it('新打开的闲鱼页登录状态暂时未知时等待页面稳定后继续', async () => {
+    const states: XianyuLoginState[] = ['unknown', 'unknown', 'logged-in'];
+    const waits: number[] = [];
+
+    const result = await waitForXianyuLoginState(
+      createDependencies({
+        sendMessage: <T>() => Promise.resolve(states.shift() as T),
+        waitForRetry: (delayMs) => {
+          waits.push(delayMs);
+          return Promise.resolve();
+        }
+      }),
+      6,
+      { attempts: 3, intervalMs: 25 }
+    );
+
+    expect(result).toBe('logged-in');
+    expect(waits).toEqual([25, 25]);
+  });
+
   it('先等待页面完成，再向已有内容脚本发送消息', async () => {
     const calls: string[] = [];
     const result = await sendXianyuMessage<string>(

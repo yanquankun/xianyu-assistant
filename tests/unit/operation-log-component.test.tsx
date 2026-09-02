@@ -21,6 +21,7 @@ const detailedEntry: OperationLogEntry = {
       price: 88,
       originalPrice: 99,
       shippingMethod: '包邮',
+      supportsPickup: false,
       categoryNote: '分类备注',
       selectedImageCount: 1,
       videoName: 'local-video.mp4'
@@ -43,6 +44,7 @@ describe('OperationLog', () => {
         source: {
           platform: 'tmall',
           canonicalUrl: 'https://detail.tmall.com/item.htm?id=200',
+          imageUrls: ['https://img.example.com/one.jpg', 'https://img.example.com/two.jpg'],
           fields: {
             title: true,
             description: false,
@@ -61,9 +63,18 @@ describe('OperationLog', () => {
     expect(screen.getByText('天猫')).toBeVisible();
     expect(screen.getByText('https://detail.tmall.com/item.htm?id=200')).toBeVisible();
     expect(screen.getByText('2 张')).toBeVisible();
+    expect(screen.getByRole('img', { name: '商品图 1' })).toHaveAttribute(
+      'src',
+      'https://img.example.com/one.jpg'
+    );
+    expect(screen.getByRole('img', { name: '商品图 2' })).toBeVisible();
     expect(screen.getAllByText('已识别')).toHaveLength(2);
     expect(screen.getAllByText('未识别')).toHaveLength(2);
     expect(screen.queryByText('标题与描述原文')).not.toBeInTheDocument();
+
+    fireEvent.error(screen.getByRole('img', { name: '商品图 1' }));
+    expect(screen.queryByRole('img', { name: '商品图 1' })).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: '商品图 2' })).toBeVisible();
   });
 
   it('外层显示快照标题，点击后显示链接和表单内容', () => {
@@ -81,6 +92,27 @@ describe('OperationLog', () => {
     expect(screen.getByText('https://item.jd.com/1.html')).toBeVisible();
     expect(screen.getByRole('button', { name: '复制提交链接' })).toBeVisible();
     expect(screen.getByRole('button', { name: '打开最终规范链接' })).toBeVisible();
+    expect(screen.getByRole('button', { name: '复制提交链接' })).toHaveClass(
+      'button',
+      'button--secondary'
+    );
+    expect(screen.getByRole('button', { name: '打开最终规范链接' })).toHaveClass(
+      'button',
+      'button--primary'
+    );
+    expect(screen.getByText('是否支持自提')).toBeVisible();
+    expect(screen.getByText('不支持')).toBeVisible();
+  });
+
+  it('存在记录时在标题区显示删除记录按钮', () => {
+    const onDeleteRequested = vi.fn();
+    render(
+      <OperationLog entries={[detailedEntry]} onDeleteRequested={onDeleteRequested} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '删除记录' }));
+
+    expect(onDeleteRequested).toHaveBeenCalledTimes(1);
   });
 
   it('一次最多展开一条，并在复制失败时给出反馈', async () => {

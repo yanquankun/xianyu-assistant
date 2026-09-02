@@ -8,6 +8,8 @@ import type {
 
 interface OperationLogProps {
   entries: readonly OperationLogEntry[];
+  onDeleteRequested?: () => void;
+  statusMessage?: string;
 }
 
 const OUTCOME_LABELS = {
@@ -74,20 +76,62 @@ function SafeUrlRow({ label, url }: { label: string; url: string }) {
   };
 
   return (
-    <div>
+    <div className="log-details__row log-details__row--wide">
       <dt>{label}</dt>
       <dd>
         <span className="log-details__link">{url}</span>
         <span className="log-details__link-actions">
-          <button type="button" onClick={() => void copyUrl()}>
-            复制{label}
+          <button
+            aria-label={`复制${label}`}
+            className="button button--secondary log-details__action"
+            type="button"
+            onClick={() => void copyUrl()}
+          >
+            复制链接
           </button>
-          <button type="button" onClick={openUrl}>
-            打开{label}
+          <button
+            aria-label={`打开${label}`}
+            className="button button--primary log-details__action"
+            type="button"
+            onClick={openUrl}
+          >
+            打开链接
           </button>
         </span>
         {copyFeedback.length === 0 ? null : <p role="status">{copyFeedback}</p>}
       </dd>
+    </div>
+  );
+}
+
+function ProductImageGallery({ urls }: { urls: readonly string[] }) {
+  const [failedUrls, setFailedUrls] = useState<Set<string>>(() => new Set());
+  const visibleUrls = urls.filter((url) => !failedUrls.has(url));
+  if (visibleUrls.length === 0) {
+    return null;
+  }
+  return (
+    <div className="log-image-grid" aria-label="商品图片预览">
+      {visibleUrls.map((url) => {
+        const originalIndex = urls.indexOf(url);
+        return (
+          <img
+            alt={`商品图 ${String(originalIndex + 1)}`}
+            className="log-image-grid__item"
+            key={url}
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            src={url}
+            onError={() =>
+              setFailedUrls((current) => {
+                const next = new Set(current);
+                next.add(url);
+                return next;
+              })
+            }
+          />
+        );
+      })}
     </div>
   );
 }
@@ -128,7 +172,7 @@ function DraftDetails({ draft }: { draft: OperationDraftSnapshot }) {
         </div>
       )}
       {draft.description === undefined ? null : (
-        <div>
+        <div className="log-details__row log-details__row--wide">
           <dt>描述</dt>
           <dd className="log-details__description">{draft.description}</dd>
         </div>
@@ -137,6 +181,18 @@ function DraftDetails({ draft }: { draft: OperationDraftSnapshot }) {
         <div>
           <dt>发货方式</dt>
           <dd>{draft.shippingMethod}</dd>
+        </div>
+      )}
+      {draft.shippingFee === undefined ? null : (
+        <div>
+          <dt>邮费金额</dt>
+          <dd>{draft.shippingFee}</dd>
+        </div>
+      )}
+      {draft.supportsPickup === undefined ? null : (
+        <div>
+          <dt>是否支持自提</dt>
+          <dd>{draft.supportsPickup ? '支持' : '不支持'}</dd>
         </div>
       )}
       {draft.categoryNote === undefined ? null : (
@@ -177,15 +233,29 @@ function SourceDetails({ source }: { source: OperationSourceSummary }) {
           ['原价', source.fields.originalPrice]
         ] as const
       ).map(([label, completed]) => (
-        <div key={label}>
+        <div className="log-details__row" key={label}>
           <dt>{label}</dt>
-          <dd>{completed ? '已识别' : '未识别'}</dd>
+          <dd>
+            <span
+              className={`log-field-status log-field-status--${completed ? 'complete' : 'missing'}`}
+            >
+              {completed ? '已识别' : '未识别'}
+            </span>
+          </dd>
         </div>
       ))}
-      <div>
+      <div className="log-details__row log-details__row--wide">
         <dt>商品图</dt>
         <dd>{source.fields.imageCount} 张</dd>
       </div>
+      {source.imageUrls === undefined ? null : (
+        <div className="log-details__row log-details__row--wide">
+          <dt>图片预览</dt>
+          <dd>
+            <ProductImageGallery urls={source.imageUrls} />
+          </dd>
+        </div>
+      )}
     </dl>
   );
 }
@@ -225,7 +295,7 @@ function LogDetails({ entry }: { entry: OperationLogEntry }) {
   );
 }
 
-export function OperationLog({ entries }: OperationLogProps) {
+export function OperationLog({ entries, onDeleteRequested, statusMessage }: OperationLogProps) {
   const [expandedEntryKey, setExpandedEntryKey] = useState<string | null>(null);
   return (
     <section className="editor-card">
@@ -234,7 +304,21 @@ export function OperationLog({ entries }: OperationLogProps) {
           <span className="eyebrow">仅保存在当前浏览器</span>
           <h2>运行记录</h2>
         </div>
+        {entries.length === 0 || onDeleteRequested === undefined ? null : (
+          <button
+            className="button button--stop log-delete-button"
+            type="button"
+            onClick={onDeleteRequested}
+          >
+            删除记录
+          </button>
+        )}
       </div>
+      {statusMessage === undefined || statusMessage.length === 0 ? null : (
+        <p className="error-message" role="alert">
+          {statusMessage}
+        </p>
+      )}
       {entries.length === 0 ? (
         <p className="empty-note">尚无运行记录。</p>
       ) : (

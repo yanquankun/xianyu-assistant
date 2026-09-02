@@ -114,6 +114,14 @@ describe('sanitizeLogEntry', () => {
           platform: 'tmall',
           canonicalUrl:
             'https://detail.tmall.com/item.htm?id=200&skuId=300&spm=a1&utm_source=share#detail',
+          imageUrls: [
+            'https://user:pass@img.example.com/one.jpg?token=secret&width=800#preview',
+            'javascript:alert(1)',
+            ...Array.from(
+              { length: 12 },
+              (_, index) => `https://img.example.com/${String(index + 2)}.jpg`
+            )
+          ],
           fields: {
             title: true,
             description: false,
@@ -128,6 +136,13 @@ describe('sanitizeLogEntry', () => {
     expect(sanitized.details?.source).toEqual({
       platform: 'tmall',
       canonicalUrl: 'https://detail.tmall.com/item.htm?id=200&skuId=300',
+      imageUrls: [
+        'https://img.example.com/one.jpg?width=800',
+        ...Array.from(
+          { length: 8 },
+          (_, index) => `https://img.example.com/${String(index + 2)}.jpg`
+        )
+      ],
       fields: {
         title: true,
         description: false,
@@ -136,6 +151,7 @@ describe('sanitizeLogEntry', () => {
         imageCount: 9
       }
     });
+    expect(JSON.stringify(sanitized)).not.toMatch(/user:pass|token=secret|javascript/u);
   });
 
   it('旧日志缺少规范 URL 时继续兼容', () => {

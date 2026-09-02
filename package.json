@@ -1,6 +1,6 @@
 {
   "name": "xianyu-assistant",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "description": "将淘宝、天猫和京东商品整理为闲鱼发布草稿的 Chrome 侧边栏扩展",

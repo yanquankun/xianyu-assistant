@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ParsedProduct, ProductDraft } from '../../src/domain/product';
 import type { StoredMediaMetadata } from '../../src/storage/media-store';
@@ -43,6 +43,7 @@ const readyDraft: ProductDraft = {
   warnings: [],
   confidence: 'high',
   shippingMethod: '包邮',
+  supportsPickup: false,
   categoryNote: '',
   updatedAt: '2026-08-31T12:00:00.000Z'
 };
@@ -52,6 +53,19 @@ interface Deferred<T> {
   resolve: (value: T) => void;
 }
 
+interface PolishOptions {
+  signal: AbortSignal;
+  onDelta: (delta: string) => void;
+}
+
+type TestSidePanelServices = SidePanelServices & {
+  polishDescription: (
+    settings: Parameters<SidePanelServices['testAiConnection']>[0],
+    draft: ProductDraft,
+    options: PolishOptions
+  ) => Promise<{ description: string; factWarnings: string[] }>;
+};
+
 function createDeferred<T>(): Deferred<T> {
   let resolve: (value: T) => void = () => undefined;
   const promise = new Promise<T>((resolvePromise) => {
@@ -60,7 +74,7 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-function createServices(overrides: Partial<SidePanelServices> = {}): SidePanelServices {
+function createServices(overrides: Partial<TestSidePanelServices> = {}): TestSidePanelServices {
   return {
     loadSettings: () => Promise.resolve(null),
     saveSettings: () => Promise.resolve(),
@@ -88,16 +102,27 @@ function createServices(overrides: Partial<SidePanelServices> = {}): SidePanelSe
         warnings: [],
         factWarnings: []
       }),
+    polishDescription: (_settings, draft, options) => {
+      options.onDelta('润色后的描述');
+      return Promise.resolve({ description: '润色后的描述', factWarnings: [] });
+    },
     checkXianyuLogin: () => Promise.resolve({ state: 'unknown', message: '尚未确认' }),
     fillDraft: () => Promise.resolve({ filled: [], skipped: [], warnings: [] }),
     openXianyuLogin: () => Promise.resolve(),
     getPanelSide: () => Promise.resolve('right'),
     loadLogs: () => Promise.resolve([]),
+    clearLogs: () => Promise.resolve(),
     ...overrides
   };
 }
 
 describe('App', () => {
+  it('在插件标题后显示当前版本号', () => {
+    render(<App services={createServices()} appVersion="0.1.3" />);
+
+    expect(screen.getByText('闲鱼上架助手')).toHaveTextContent('闲鱼上架助手（v0.1.3）');
+  });
+
   it('在商品入口明确显示淘宝、天猫和京东', () => {
     render(<App services={createServices()} />);
 
@@ -122,7 +147,7 @@ describe('App', () => {
     expect(await screen.findByText('天猫来源')).toBeVisible();
   });
 
-  it('无图片和视频的完整草稿也允许填入闲鱼', async () => {
+  it('无图片的完整草稿禁止填入闲鱼并说明最低图片要求', async () => {
     let submittedDraft: ProductDraft | null = null;
     render(
       <App
@@ -147,11 +172,9 @@ describe('App', () => {
     fireEvent.change(screen.getByLabelText('商品描述'), { target: { value: '仅填写文本' } });
 
     const fillButton = screen.getByRole('button', { name: '填入闲鱼' });
-    expect(fillButton).toBeEnabled();
-    fireEvent.click(fillButton);
-
-    await waitFor(() => expect(submittedDraft).not.toBeNull());
-    expect(submittedDraft).toMatchObject({ images: [], videos: [] });
+    expect(fillButton).toBeDisabled();
+    expect(screen.getByText('至少添加一张已加载的商品图片后才能填入闲鱼')).toBeVisible();
+    expect(submittedDraft).toBeNull();
   });
 
   it('使用可键盘操作的非原生发货方式下拉框', async () => {
@@ -167,11 +190,28 @@ describe('App', () => {
 
     fireEvent.keyDown(combobox, { key: 'ArrowDown' });
     fireEvent.keyDown(combobox, { key: 'Enter' });
-    expect(combobox).toHaveTextContent('邮费另议');
+    expect(combobox).toHaveTextContent('按距离计费');
     expect(screen.queryByRole('listbox', { name: '发货方式' })).toBeNull();
   });
 
-  it('一次上传多个视频并可分别删除', async () => {
+  it('支持配置自提，并在一口价时显示邮费金额', async () => {
+    render(<App services={createServices()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '手动填写' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: '支持自提' }));
+    expect(screen.getByRole('checkbox', { name: '支持自提' })).toBeChecked();
+
+    const combobox = screen.getByRole('combobox', { name: '发货方式' });
+    fireEvent.click(combobox);
+    fireEvent.click(screen.getByRole('option', { name: '一口价' }));
+
+    expect(screen.getByLabelText('邮费金额')).toBeVisible();
+    fireEvent.change(screen.getByLabelText('邮费金额'), { target: { value: '12' } });
+    expect(screen.getByLabelText('邮费金额')).toHaveValue(12);
+  });
+
+  // 闲鱼 Web 恢复视频上传能力后重新启用以下视频工作流用例。
+  it.skip('一次上传多个视频并可分别删除', async () => {
     const deleted: string[] = [];
     render(
       <App
@@ -200,7 +240,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '删除商品视频 1' }));
     await waitFor(() => expect(deleted).toContain('asset-one.mp4'));
-    expect(await screen.findByText('媒体 1/9')).toBeVisible();
+    expect(await screen.findByText('图片 1/9')).toBeVisible();
     expect(screen.queryByText(/one\.mp4/u)).toBeNull();
     expect(screen.getByText(/two\.mov/u)).toBeVisible();
   });
@@ -221,7 +261,7 @@ describe('App', () => {
     });
 
     expect(await screen.findByRole('button', { name: '上传中…' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '上传视频' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: '上传视频' })).toBeNull();
 
     save.resolve({
       assetId: 'asset-demo',
@@ -235,7 +275,7 @@ describe('App', () => {
     expect(await screen.findByRole('button', { name: '上传图片' })).toBeEnabled();
   });
 
-  it('图片和视频并行上传时不会保留超出总量上限的媒体', async () => {
+  it.skip('图片和视频并行上传时不会保留超出总量上限的媒体', async () => {
     const storedAssetIds = new Set<string>();
     const draftWithEightImages: ProductDraft = {
       ...readyDraft,
@@ -662,12 +702,12 @@ describe('App', () => {
       byteLength: 5,
       createdAt: '2026-08-31T14:00:00.000Z'
     });
-    expect(await screen.findByText('媒体 1/9')).toBeVisible();
+    expect(await screen.findByText('图片 1/9')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: '确认返回' }));
 
     expect(await screen.findByText('草稿已更新，请重新确认返回')).toBeVisible();
     expect(cleared).toBe(0);
-    expect(screen.getByText('媒体 1/9')).toBeVisible();
+    expect(screen.getByText('图片 1/9')).toBeVisible();
   });
 
   it('清除草稿等待期间丢弃迟到媒体并补偿删除 Blob', async () => {
@@ -792,44 +832,150 @@ describe('App', () => {
 
     await waitFor(() => expect(savedTitles).toContain('用户手动输入的标题'));
     expect(screen.getByText('手动输入')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'AI 扩写' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'AI 润色' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '填入闲鱼' })).toBeDisabled();
   });
 
-  it('AI 扩写加载时禁用按钮，完成后直接写回表单', async () => {
-    const expansion = createDeferred<{
-      title: string;
-      description: string;
-      warnings: string[];
-      factWarnings: string[];
-    }>();
-    render(<App services={createServices({ expandDraft: () => expansion.promise })} />);
+  it('AI 润色先清空描述再流式显示，生成完成后保留标题并显示恢复按钮', async () => {
+    const completion = createDeferred<{ description: string; factWarnings: string[] }>();
+    const optionsReady = createDeferred<PolishOptions>();
+    render(
+      <App
+        services={createServices({
+          polishDescription: (_settings, _draft, nextOptions) => {
+            optionsReady.resolve(nextOptions);
+            return completion.promise;
+          }
+        })}
+      />
+    );
 
     fireEvent.click(await screen.findByRole('button', { name: '手动填写' }));
     const title = await screen.findByLabelText('商品标题');
-    fireEvent.change(title, { target: { value: '扩写前标题' } });
-    fireEvent.change(screen.getByLabelText('商品描述'), { target: { value: '扩写前描述' } });
+    fireEvent.change(title, { target: { value: '润色前标题' } });
+    const description = screen.getByLabelText('商品描述');
+    fireEvent.change(description, { target: { value: '润色前描述' } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'AI 扩写' }));
+    fireEvent.click(screen.getByRole('button', { name: 'AI 润色' }));
 
-    const loadingButton = screen.getByRole('button', { name: 'AI 扩写中' });
-    expect(loadingButton).toBeDisabled();
-    expect(loadingButton).toHaveAttribute('aria-busy', 'true');
-    expect(loadingButton.querySelector('.ai-expansion-spinner')).toHaveAttribute(
-      'aria-hidden',
-      'true'
+    expect(screen.getByRole('button', { name: '停止润色' })).toBeEnabled();
+    expect(description).toHaveValue('');
+    expect(description).toHaveAttribute('readonly');
+    expect(screen.getByRole('status', { name: 'AI 正在润色商品描述' })).toHaveTextContent(
+      '等待 AI 响应…'
+    );
+    expect(screen.queryByRole('button', { name: '恢复' })).toBeNull();
+
+    const options = await optionsReady.promise;
+    act(() => {
+      options.onDelta('第一段第二段');
+    });
+    expect(description).toHaveValue('第');
+    expect(screen.getByRole('status', { name: 'AI 正在润色商品描述' })).toHaveTextContent(
+      '正在生成…'
+    );
+    await waitFor(() => expect(description).toHaveValue('第一段第二段'));
+
+    completion.resolve({ description: '第一段第二段', factWarnings: ['仅写入运行记录'] });
+
+    expect(await screen.findByRole('button', { name: '恢复' })).toBeVisible();
+    expect(screen.getByLabelText('商品标题')).toHaveValue('润色前标题');
+    expect(screen.getByLabelText('商品描述')).toHaveValue('第一段第二段');
+    expect(screen.getByRole('button', { name: 'AI 润色' })).toBeEnabled();
+    expect(screen.queryByRole('status', { name: 'AI 正在润色商品描述' })).toBeNull();
+    expect(screen.queryByText('仅写入运行记录')).toBeNull();
+  });
+
+  it('生成中点击停止会取消请求并恢复初始商品描述', async () => {
+    let signal: AbortSignal | null = null;
+    render(
+      <App
+        services={createServices({
+          polishDescription: (_settings, _draft, options) => {
+            signal = options.signal;
+            options.onDelta('尚未完成');
+            return new Promise((_resolve, reject) => {
+              options.signal.addEventListener('abort', () => {
+                reject(new DOMException('Aborted', 'AbortError'));
+              });
+            });
+          }
+        })}
+      />
     );
 
-    expansion.resolve({
-      title: '扩写后标题',
-      description: '扩写后描述',
-      warnings: [],
-      factWarnings: []
-    });
+    fireEvent.click(await screen.findByRole('button', { name: '手动填写' }));
+    const description = screen.getByLabelText('商品描述');
+    fireEvent.change(description, { target: { value: '需要保留的原描述' } });
+    fireEvent.click(screen.getByRole('button', { name: 'AI 润色' }));
 
-    expect(await screen.findByDisplayValue('扩写后标题')).toBeVisible();
-    expect(screen.getByDisplayValue('扩写后描述')).toBeVisible();
-    expect(screen.queryByText('AI 文案预览')).toBeNull();
+    expect(description).toHaveValue('尚');
+    fireEvent.click(screen.getByRole('button', { name: '停止润色' }));
+
+    expect(signal).not.toBeNull();
+    expect((signal as AbortSignal | null)?.aborted).toBe(true);
+    expect(description).toHaveValue('需要保留的原描述');
+    expect(screen.queryByRole('button', { name: '恢复' })).toBeNull();
+  });
+
+  it('完成润色后经二次确认恢复初始描述，取消确认时保留生成内容', async () => {
+    render(<App services={createServices()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '手动填写' }));
+    const description = screen.getByLabelText('商品描述');
+    fireEvent.change(description, { target: { value: '最初的商品描述' } });
+    fireEvent.click(screen.getByRole('button', { name: 'AI 润色' }));
+
+    const restoreButton = await screen.findByRole('button', { name: '恢复' });
+    expect(description).toHaveValue('润色后的描述');
+    fireEvent.click(restoreButton);
+    expect(screen.getByRole('dialog', { name: '恢复初始描述' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(description).toHaveValue('润色后的描述');
+    expect(restoreButton).toHaveFocus();
+
+    fireEvent.click(screen.getByRole('button', { name: '恢复' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认恢复' }));
+
+    expect(description).toHaveValue('最初的商品描述');
+    expect(screen.queryByRole('button', { name: '恢复' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'AI 润色' })).toHaveFocus();
+  });
+
+  it('润色失败后重试成功会清除旧错误并保留初始恢复基线', async () => {
+    let attempts = 0;
+    render(
+      <App
+        services={createServices({
+          polishDescription: (_settings, _draft, options) => {
+            attempts += 1;
+            if (attempts === 1) {
+              return Promise.reject(new Error('第一次润色失败'));
+            }
+            const description = attempts === 2 ? '第一次成功结果' : '第二次成功结果';
+            options.onDelta(description);
+            return Promise.resolve({ description, factWarnings: [] });
+          }
+        })}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '手动填写' }));
+    const description = screen.getByLabelText('商品描述');
+    fireEvent.change(description, { target: { value: '首次润色前的描述' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'AI 润色' }));
+    expect(await screen.findByText('第一次润色失败')).toBeVisible();
+    expect(description).toHaveValue('首次润色前的描述');
+
+    fireEvent.click(screen.getByRole('button', { name: 'AI 润色' }));
+    expect(await screen.findByDisplayValue('第一次成功结果')).toBeVisible();
+    expect(screen.queryByText('第一次润色失败')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'AI 润色' }));
+    expect(await screen.findByDisplayValue('第二次成功结果')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: '恢复' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认恢复' }));
+    expect(description).toHaveValue('首次润色前的描述');
   });
 
   it('手动输入负原价时不把无效数值写入草稿', async () => {
@@ -861,7 +1007,8 @@ describe('App', () => {
       videos: [],
       warnings: [],
       confidence: 'low' as const,
-      shippingMethod: '包邮',
+      shippingMethod: '包邮' as const,
+      supportsPickup: false,
       categoryNote: '',
       updatedAt: '2026-08-31T12:00:00.000Z'
     };
@@ -909,7 +1056,8 @@ describe('App', () => {
       videos: [],
       warnings: [],
       confidence: 'high' as const,
-      shippingMethod: '包邮',
+      shippingMethod: '包邮' as const,
+      supportsPickup: false,
       categoryNote: '',
       updatedAt: '2026-08-31T12:00:00.000Z'
     };
@@ -964,7 +1112,36 @@ describe('App', () => {
     expect(calls).toBeGreaterThanOrEqual(2);
   });
 
-  it('无 MIME 的 MOV 视频按校验后的 MIME 保存并追加到旧视频', async () => {
+  it('确认删除运行记录后清空本地记录和当前列表', async () => {
+    const clearLogs = vi.fn(() => Promise.resolve());
+    const services = {
+      ...createServices({
+        loadLogs: () =>
+          Promise.resolve([
+            {
+              id: 'log-delete',
+              timestamp: '2026-09-02T14:00:00.000Z',
+              stage: 'ai' as const,
+              outcome: 'failure' as const,
+              message: '待删除记录'
+            }
+          ])
+      }),
+      clearLogs
+    };
+    render(<App services={services} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '运行记录' }));
+    expect(await screen.findByText('待删除记录')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: '删除记录' }));
+    expect(screen.getByRole('dialog', { name: '删除运行记录' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+
+    await waitFor(() => expect(clearLogs).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('尚无运行记录。')).toBeVisible();
+  });
+
+  it.skip('无 MIME 的 MOV 视频按校验后的 MIME 保存并追加到旧视频', async () => {
     const savedMimeTypes: string[] = [];
     const deleted: string[] = [];
     const storedDraft = {
@@ -988,7 +1165,8 @@ describe('App', () => {
       ],
       warnings: [],
       confidence: 'low' as const,
-      shippingMethod: '包邮',
+      shippingMethod: '包邮' as const,
+      supportsPickup: false,
       categoryNote: '',
       updatedAt: '2026-08-31T12:00:00.000Z'
     };
@@ -1095,7 +1273,7 @@ describe('App', () => {
     );
   });
 
-  it('两次视频上传乱序完成时丢弃已失效请求的文件', async () => {
+  it.skip('两次视频上传乱序完成时丢弃已失效请求的文件', async () => {
     const first = createDeferred<{
       assetId: string;
       kind: 'video';

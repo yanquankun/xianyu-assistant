@@ -3,6 +3,11 @@ import type { XianyuFillPayload } from '../src/xianyu/fill';
 import { fillXianyuDraft, isXianyuFillPayload } from '../src/xianyu/fill';
 import { detectLoginState } from '../src/xianyu/login';
 import {
+  isXianyuPublishFormReady,
+  waitForXianyuPublishFormReady
+} from '../src/xianyu/fill-readiness';
+import { isXianyuVideoUploadEnabled } from '../src/xianyu/features';
+import {
   MEDIA_TRANSFER_PORT_NAME,
   receiveMediaFile,
   type MediaTransferClientPort
@@ -45,17 +50,23 @@ function connectMediaTransferPort(): MediaTransferClientPort {
 }
 
 async function fillMessage(document: Document, message: FillMessage) {
-  const videoTransfers = await Promise.all(
-    (message.payload.videoTransfers ?? []).map(async (descriptor) => {
-      try {
-        return { file: await receiveMediaFile(descriptor, connectMediaTransferPort) } as const;
-      } catch (error) {
-        return {
-          failure: `${descriptor.fileName}：${error instanceof Error ? error.message : '视频传输失败'}`
-        } as const;
-      }
-    })
+  await waitForXianyuPublishFormReady(
+    () => isXianyuPublishFormReady(document),
+    (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs))
   );
+  const videoTransfers = isXianyuVideoUploadEnabled()
+    ? await Promise.all(
+        (message.payload.videoTransfers ?? []).map(async (descriptor) => {
+          try {
+            return { file: await receiveMediaFile(descriptor, connectMediaTransferPort) } as const;
+          } catch (error) {
+            return {
+              failure: `${descriptor.fileName}：${error instanceof Error ? error.message : '视频传输失败'}`
+            } as const;
+          }
+        })
+      )
+    : [];
   const videoFiles = videoTransfers.flatMap((transfer) =>
     'file' in transfer ? [transfer.file] : []
   );

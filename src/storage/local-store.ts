@@ -27,6 +27,7 @@ export interface LocalStore {
   clearDraft(): Promise<void>;
   getLogs(): Promise<OperationLogEntry[]>;
   appendLog(entry: OperationLogEntry): Promise<void>;
+  clearLogs(): Promise<void>;
 }
 
 function cloneValue<T>(value: T): T {
@@ -90,6 +91,10 @@ export function createLocalStore(storageArea: StorageAreaLike): LocalStore {
     async appendLog(entry: OperationLogEntry): Promise<void> {
       const existing = await this.getLogs();
       await storageArea.set({ [LOGS_KEY]: appendOperationLog(existing, entry) });
+    },
+
+    async clearLogs(): Promise<void> {
+      await storageArea.remove(LOGS_KEY);
     }
   };
 }

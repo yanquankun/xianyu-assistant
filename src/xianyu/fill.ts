@@ -1,4 +1,9 @@
-import { getRemoteImageUrl, type ProductImage } from '../domain/product';
+import {
+  getRemoteImageUrl,
+  SHIPPING_METHODS,
+  type ProductImage,
+  type ShippingMethod
+} from '../domain/product';
 import type { AppError, OperationResult } from '../domain/errors';
 import type { MediaStore, StoredMediaAsset } from '../storage/media-store';
 import {
@@ -10,6 +15,7 @@ import {
 } from './dom';
 import { isMediaTransferDescriptor, type MediaTransferDescriptor } from './media-transfer';
 import { MAX_MEDIA_COUNT } from '../media/validation';
+import { isXianyuVideoUploadEnabled } from './features';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -48,7 +54,9 @@ export interface XianyuFillPayload {
   description: string;
   price: number;
   originalPrice?: number;
-  shippingMethod: string;
+  shippingMethod: ShippingMethod;
+  shippingFee?: number;
+  supportsPickup: boolean;
   categoryNote: string;
   images: TransferableImage[];
   videoTransfers?: MediaTransferDescriptor[];
@@ -89,6 +97,8 @@ export function isXianyuFillPayload(value: unknown): value is XianyuFillPayload 
       'price',
       'originalPrice',
       'shippingMethod',
+      'shippingFee',
+      'supportsPickup',
       'categoryNote',
       'images',
       'videoTransfers'
@@ -102,9 +112,16 @@ export function isXianyuFillPayload(value: unknown): value is XianyuFillPayload 
       (typeof value.originalPrice !== 'number' ||
         !Number.isFinite(value.originalPrice) ||
         value.originalPrice <= 0)) ||
-    !isBoundedText(value.shippingMethod, 100) ||
+    !SHIPPING_METHODS.some((method) => method === value.shippingMethod) ||
+    (value.shippingMethod === '一口价'
+      ? typeof value.shippingFee !== 'number' ||
+        !Number.isFinite(value.shippingFee) ||
+        value.shippingFee <= 0
+      : value.shippingFee !== undefined) ||
+    typeof value.supportsPickup !== 'boolean' ||
     !isBoundedText(value.categoryNote, 1_000) ||
     !Array.isArray(value.images) ||
+    value.images.length === 0 ||
     value.images.length > MAX_MEDIA_COUNT ||
     !value.images.every(isTransferableImage) ||
     (value.videoTransfers !== undefined &&
@@ -122,7 +139,16 @@ export function isXianyuFillPayload(value: unknown): value is XianyuFillPayload 
   return totalBase64Length <= Math.ceil((MAX_TOTAL_IMAGE_BYTES * 4) / 3) + 4;
 }
 
-export type FillField = 'title' | 'price' | 'description' | 'images' | 'video';
+export type FillField =
+  | 'title'
+  | 'price'
+  | 'originalPrice'
+  | 'description'
+  | 'shippingMethod'
+  | 'shippingFee'
+  | 'supportsPickup'
+  | 'images'
+  | 'video';
 
 export interface SkippedField {
   field: FillField;
@@ -135,7 +161,17 @@ export interface FillResult {
   warnings: string[];
 }
 
-const FILL_FIELDS: readonly FillField[] = ['title', 'price', 'description', 'images', 'video'];
+const FILL_FIELDS: readonly FillField[] = [
+  'title',
+  'price',
+  'originalPrice',
+  'description',
+  'shippingMethod',
+  'shippingFee',
+  'supportsPickup',
+  'images',
+  'video'
+];
 
 function isFillField(value: unknown): value is FillField {
   return typeof value === 'string' && FILL_FIELDS.includes(value as FillField);
@@ -424,7 +460,7 @@ export async function prepareImages(
 
 function fillTextField(
   document: Document,
-  field: 'title' | 'price' | 'description',
+  field: FillField,
   selectors: readonly string[],
   label: string,
   value: string,
@@ -446,12 +482,172 @@ function fillTextField(
   }
 }
 
+function selectShippingMethod(
+  document: Document,
+  shippingMethod: ShippingMethod,
+  result: FillResult
+): void {
+  const label = Array.from(document.querySelectorAll<HTMLLabelElement>('label')).find(
+    (candidate) => candidate.innerText.trim() === shippingMethod
+  );
+  const input = label?.querySelector<HTMLInputElement>('input[type="radio"]') ?? null;
+  if (input === null) {
+    result.skipped.push({ field: 'shippingMethod', reason: '未找到发货方式字段' });
+    return;
+  }
+  input.click();
+  result.filled.push('shippingMethod');
+}
+
+function fillPickupSwitch(document: Document, supportsPickup: boolean, result: FillResult): void {
+  const switchControl = Array.from(document.querySelectorAll<HTMLElement>('[role="switch"]')).find(
+    (candidate) => candidate.parentElement?.innerText.includes('支持自提')
+  );
+  if (switchControl === undefined) {
+    result.skipped.push({ field: 'supportsPickup', reason: '未找到支持自提开关' });
+    return;
+  }
+  const checked = switchControl.getAttribute('aria-checked') === 'true';
+  if (checked !== supportsPickup) {
+    switchControl.click();
+  }
+  result.filled.push('supportsPickup');
+}
+
 function createFiles(images: readonly TransferableImage[]): File[] {
   return images.map((image) => {
     const bytes = base64ToBytes(image.dataBase64);
     const buffer = new ArrayBuffer(bytes.byteLength);
     new Uint8Array(buffer).set(bytes);
     return new File([buffer], image.name, { type: image.mimeType });
+  });
+}
+
+const managedImageSourcesByDocument = new WeakMap<Document, Map<string, string>>();
+
+function imageListFor(input: HTMLInputElement): HTMLElement | null {
+  const root = input.closest<HTMLElement>('.ant-form-item, form') ?? input.ownerDocument.body;
+  return root.querySelector<HTMLElement>('[class*="imgList--"]');
+}
+
+function imagePreviewItems(list: HTMLElement): HTMLElement[] {
+  return Array.from(list.querySelectorAll<HTMLElement>('[class*="preview-container--"]'));
+}
+
+function normalizedRemoteImageSource(source: string): string | null {
+  const value = source.trim();
+  if (value.startsWith('//')) {
+    return `https:${value}`;
+  }
+  return value.startsWith('https://') || value.startsWith('http://') ? value : null;
+}
+
+function imagePreviewSource(item: HTMLElement): string | null {
+  for (const image of item.querySelectorAll<HTMLImageElement>('img')) {
+    if (image.style.objectFit !== 'contain' || image.style.display === 'none') {
+      continue;
+    }
+    const source = normalizedRemoteImageSource(image.getAttribute('src') ?? '');
+    if (source !== null) {
+      return source;
+    }
+  }
+  return null;
+}
+
+function managedImageSources(document: Document): Map<string, string> {
+  const existing = managedImageSourcesByDocument.get(document);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = new Map<string, string>();
+  managedImageSourcesByDocument.set(document, created);
+  return created;
+}
+
+async function waitForImageCondition(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    if (condition()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error('闲鱼图片列表同步超时，请检查图片上传状态后重试');
+}
+
+async function syncImageFileInput(
+  input: HTMLInputElement,
+  images: readonly TransferableImage[]
+): Promise<void> {
+  const list = imageListFor(input);
+  if (list === null) {
+    fillFileInput(input, createFiles(images));
+    return;
+  }
+
+  const sourcesByImageId = managedImageSources(input.ownerDocument);
+  const desiredIds = new Set(images.map((image) => image.id));
+  for (const [imageId, source] of sourcesByImageId) {
+    if (desiredIds.has(imageId)) {
+      continue;
+    }
+    const item = imagePreviewItems(list).find(
+      (candidate) => imagePreviewSource(candidate) === source
+    );
+    sourcesByImageId.delete(imageId);
+    if (item === undefined) {
+      continue;
+    }
+    const previousCount = imagePreviewItems(list).length;
+    const remove = item.querySelector<HTMLElement>('[class*="delete-btn--"]');
+    if (remove === null) {
+      throw new Error('未找到闲鱼图片删除控件，已停止同步以避免重复图片');
+    }
+    remove.click();
+    await waitForImageCondition(() => imagePreviewItems(list).length < previousCount);
+  }
+
+  const currentSources = new Set(
+    imagePreviewItems(list).flatMap((item) => {
+      const source = imagePreviewSource(item);
+      return source === null ? [] : [source];
+    })
+  );
+  const existingIds = new Set<string>();
+  for (const [imageId, source] of sourcesByImageId) {
+    if (currentSources.has(source)) {
+      existingIds.add(imageId);
+    } else {
+      sourcesByImageId.delete(imageId);
+    }
+  }
+  const missingImages = images.filter((image) => !existingIds.has(image.id));
+  if (missingImages.length === 0) {
+    return;
+  }
+
+  const previousCount = imagePreviewItems(list).length;
+  fillFileInput(input, createFiles(missingImages));
+  await waitForImageCondition(() => {
+    const uploadedItems = imagePreviewItems(list).slice(
+      previousCount,
+      previousCount + missingImages.length
+    );
+    return (
+      uploadedItems.length === missingImages.length &&
+      uploadedItems.every((item) => imagePreviewSource(item) !== null)
+    );
+  });
+  const uploadedItems = imagePreviewItems(list).slice(
+    previousCount,
+    previousCount + missingImages.length
+  );
+  uploadedItems.forEach((item, index) => {
+    const image = missingImages[index];
+    const source = imagePreviewSource(item);
+    if (image !== undefined && source !== null) {
+      sourcesByImageId.set(image.id, source);
+    }
   });
 }
 
@@ -469,6 +665,16 @@ export async function fillXianyuDraft(
     payload.title,
     result
   );
+  if (payload.originalPrice !== undefined) {
+    fillTextField(
+      document,
+      'originalPrice',
+      ['input[name="originalPrice"]'],
+      '原价',
+      String(payload.originalPrice),
+      result
+    );
+  }
   fillTextField(
     document,
     'price',
@@ -477,6 +683,20 @@ export async function fillXianyuDraft(
     String(payload.price),
     result
   );
+
+  selectShippingMethod(document, payload.shippingMethod, result);
+  await Promise.resolve();
+  if (payload.shippingMethod === '一口价' && payload.shippingFee !== undefined) {
+    fillTextField(
+      document,
+      'shippingFee',
+      ['input[name="shippingFee"]'],
+      '邮费',
+      String(payload.shippingFee),
+      result
+    );
+  }
+  fillPickupSwitch(document, payload.supportsPickup, result);
   fillTextField(
     document,
     'description',
@@ -491,7 +711,7 @@ export async function fillXianyuDraft(
     result.skipped.push({ field: 'images', reason: '未找到图片上传字段' });
   } else if (input !== null) {
     try {
-      fillFileInput(input, createFiles(payload.images));
+      await syncImageFileInput(input, payload.images);
       result.filled.push('images');
     } catch (error) {
       result.skipped.push({
@@ -501,7 +721,7 @@ export async function fillXianyuDraft(
     }
   }
 
-  if (videoFiles.length > 0) {
+  if (isXianyuVideoUploadEnabled() && videoFiles.length > 0) {
     const videoInput = findVideoFileInput(document);
     if (videoInput === null) {
       result.skipped.push({
@@ -519,7 +739,7 @@ export async function fillXianyuDraft(
         });
       }
     }
-  } else if ((payload.videoTransfers?.length ?? 0) > 0) {
+  } else if (isXianyuVideoUploadEnabled() && (payload.videoTransfers?.length ?? 0) > 0) {
     result.skipped.push({ field: 'video', reason: '视频传输失败，请在闲鱼页面手动上传视频' });
   }
   await Promise.resolve();

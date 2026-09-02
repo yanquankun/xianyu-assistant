@@ -36,7 +36,34 @@ afterEach(() => {
 });
 
 describe('MediaPicker', () => {
-  it('上传图片期间只禁用图片入口', () => {
+  it('暂时隐藏闲鱼网页不支持的视频上传入口', () => {
+    render(
+      <MediaPicker
+        images={[]}
+        videos={[
+          {
+            id: 'legacy-video',
+            assetId: 'legacy-video-asset',
+            fileName: 'legacy.mp4',
+            mimeType: 'video/mp4',
+            byteLength: 5
+          }
+        ]}
+        resolveLocalAsset={() => Promise.resolve(null)}
+        onUploadImages={() => undefined}
+        onUploadVideos={() => undefined}
+        onRemoveImage={() => undefined}
+        onRemoveVideo={() => undefined}
+        onLoadStatus={() => undefined}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: '上传视频' })).toBeNull();
+    expect(screen.queryByLabelText('上传商品视频')).toBeNull();
+    expect(screen.getByText('图片 0/9')).toBeVisible();
+  });
+
+  it('上传图片期间禁用图片入口且保持视频入口隐藏', () => {
     render(
       <MediaPicker
         images={[]}
@@ -53,12 +80,13 @@ describe('MediaPicker', () => {
     );
 
     expect(screen.getByRole('button', { name: '上传中…' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '上传视频' })).toBeEnabled();
     expect(screen.getByLabelText('上传商品图片')).toBeDisabled();
-    expect(screen.getByLabelText('上传商品视频')).toBeEnabled();
+    expect(screen.queryByRole('button', { name: '上传视频' })).toBeNull();
+    expect(screen.queryByLabelText('上传商品视频')).toBeNull();
   });
 
-  it('上传视频期间只禁用视频入口', () => {
+  // 闲鱼 Web 恢复视频上传能力后重新启用以下视频交互用例。
+  it.skip('上传视频期间只禁用视频入口', () => {
     render(
       <MediaPicker
         images={[]}
@@ -80,7 +108,7 @@ describe('MediaPicker', () => {
     expect(screen.getByLabelText('上传商品视频')).toBeDisabled();
   });
 
-  it('不显示图片选中态并按全部媒体计数', () => {
+  it('不显示图片选中态并按可用图片计数', () => {
     render(
       <MediaPicker
         images={[remoteImage]}
@@ -96,11 +124,11 @@ describe('MediaPicker', () => {
       />
     );
 
-    expect(screen.getByText('媒体 1/9')).toBeVisible();
+    expect(screen.getByText('图片 1/9')).toBeVisible();
     expect(screen.queryByRole('checkbox')).toBeNull();
   });
 
-  it('视频文件选择器允许一次选择多个文件', () => {
+  it.skip('视频文件选择器允许一次选择多个文件', () => {
     render(
       <MediaPicker
         images={[]}
@@ -506,7 +534,7 @@ describe('MediaPicker', () => {
     expect(revokeObjectURL).not.toHaveBeenCalled();
   });
 
-  it('将视频显示为带播放按钮的缩略图', async () => {
+  it.skip('将视频显示为带播放按钮的缩略图', async () => {
     const createObjectURL = vi.fn(() => 'blob:video-thumbnail');
     vi.stubGlobal('URL', { createObjectURL, revokeObjectURL: vi.fn() });
     render(
@@ -550,7 +578,7 @@ describe('MediaPicker', () => {
     expect(await screen.findByRole('dialog', { name: '媒体预览' })).toBeVisible();
   });
 
-  it('视频预览将原生 controls 纳入 Tab 焦点循环并恢复触发元素焦点', async () => {
+  it.skip('视频预览将原生 controls 纳入 Tab 焦点循环并恢复触发元素焦点', async () => {
     const createObjectURL = vi.fn(() => 'blob:video-preview');
     const revokeObjectURL = vi.fn();
     vi.stubGlobal('URL', { createObjectURL, revokeObjectURL });

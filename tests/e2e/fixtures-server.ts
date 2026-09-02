@@ -53,6 +53,30 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       });
       request.on('end', () => {
         requests.push(body);
+        let payload: unknown;
+        try {
+          payload = JSON.parse(body);
+        } catch {
+          payload = null;
+        }
+        if (
+          typeof payload === 'object' &&
+          payload !== null &&
+          'stream' in payload &&
+          payload.stream === true
+        ) {
+          response.writeHead(200, {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache'
+          });
+          setTimeout(() => {
+            response.write(
+              `data: ${JSON.stringify({ choices: [{ delta: { content: '商品信息清晰完整，请以当前页面和实物为准。' } }] })}\n\n`
+            );
+            response.end('data: [DONE]\n\n');
+          }, 450);
+          return;
+        }
         setTimeout(() => {
           response.writeHead(200, { 'Content-Type': 'application/json' });
           response.end(

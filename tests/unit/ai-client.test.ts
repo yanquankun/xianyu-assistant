@@ -25,13 +25,26 @@ const draft: ProductDraft = {
   title: '当前标题',
   description: '原始描述',
   price: 99,
+  originalPrice: 129,
   currency: 'CNY',
-  images: [],
+  images: [
+    {
+      id: 'private-image',
+      location: {
+        kind: 'remote',
+        url: 'https://media.example.com/private-image.jpg',
+        extractedBy: 'platform-gallery'
+      },
+      loadStatus: 'loaded'
+    }
+  ],
   videos: [],
-  warnings: [],
+  warnings: ['不应发送的内部警告'],
   confidence: 'high',
-  shippingMethod: '包邮',
-  categoryNote: '',
+  shippingMethod: '一口价',
+  shippingFee: 12,
+  supportsPickup: true,
+  categoryNote: '家用电器',
   updatedAt: '2026-08-31T10:00:00.000Z'
 };
 
@@ -52,6 +65,34 @@ function chatResponse(content: string, status = 200): Response {
       usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 }
     }),
     { status, headers: { 'content-type': 'application/json' } }
+  );
+}
+
+function streamResponse(chunks: readonly string[]): Response {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(encoder.encode(chunk));
+        }
+        controller.close();
+      }
+    }),
+    { status: 200, headers: { 'content-type': 'text/event-stream' } }
+  );
+}
+
+function byteStreamResponse(bytes: Uint8Array, splitAt: number): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.slice(0, splitAt));
+        controller.enqueue(bytes.slice(splitAt));
+        controller.close();
+      }
+    }),
+    { status: 200, headers: { 'content-type': 'text/event-stream' } }
   );
 }
 
@@ -88,6 +129,245 @@ describe('normalizeChatCompletionsUrl', () => {
 });
 
 describe('createAiClient', () => {
+  it('按 SSE 分片输出润色后的商品描述并启用 stream 参数', async () => {
+    const deltas: string[] = [];
+    let requestBody = '';
+    const client = createAiClient((_input, init) => {
+      requestBody = typeof init?.body === 'string' ? init.body : '';
+      return Promise.resolve(
+        streamResponse([
+          'data: {"choices":[{"delta":{"content":"自然"}}]}\n',
+          '\ndata: {"choices":[{"delta":{"content":"清晰的描述"}}]}\n\n',
+          'data: {"choices":[],"usage":{"total_tokens":12}}\n\n',
+          'data: [DONE]\n\n'
+        ])
+      );
+    });
+
+    const result = await client.polishDescription(settings, draft, {
+      signal: new AbortController().signal,
+      onDelta: (delta) => deltas.push(delta)
+    });
+
+    expect(result.description).toBe('自然清晰的描述');
+    expect(deltas).toEqual(['自然', '清晰的描述']);
+    const body = JSON.parse(requestBody) as Record<string, unknown>;
+    expect(body.stream).toBe(true);
+    expect(body).not.toHaveProperty('max_tokens');
+    expect(body).not.toHaveProperty('response_format');
+    const messages = body.messages as { role: string; content: string }[];
+    const userContent = messages.find((message) => message.role === 'user')?.content ?? '';
+    const serializedMessages = JSON.stringify(messages);
+    expect(userContent).toContain('当前标题');
+    expect(userContent).toContain('原始描述');
+    expect(userContent).toContain('商品标题：当前标题');
+    expect(userContent).toContain('售价：99 CNY');
+    expect(userContent).toContain('原价：129 CNY');
+    expect(userContent).toContain('商品描述：原始描述');
+    expect(userContent).toContain('发货方式：一口价');
+    expect(userContent).toContain('邮费金额：12 CNY');
+    expect(userContent).toContain('支持自提：是');
+    expect(userContent).toContain('分类备注：家用电器');
+    expect(serializedMessages).not.toContain(draft.canonicalUrl);
+    expect(serializedMessages).not.toContain('不应发送的内部警告');
+    expect(serializedMessages).not.toContain('private-image.jpg');
+  });
+
+  it('兼容忽略 stream 参数而返回普通 Chat Completions JSON 的接口', async () => {
+    const deltas: string[] = [];
+    const client = createAiClient(() => Promise.resolve(chatResponse('普通响应中的商品描述')));
+
+    const result = await client.polishDescription(settings, draft, {
+      signal: new AbortController().signal,
+      onDelta: (delta) => deltas.push(delta)
+    });
+
+    expect(result.description).toBe('普通响应中的商品描述');
+    expect(deltas).toEqual(['普通响应中的商品描述']);
+  });
+
+  it('DeepSeek 商品润色关闭思考模式并限制生成规模', async () => {
+    let requestBody = '';
+    const client = createAiClient((_input, init) => {
+      requestBody = typeof init?.body === 'string' ? init.body : '';
+      return Promise.resolve(
+        streamResponse([
+          'data: {"choices":[{"delta":{"content":"简洁商品描述"}}]}\n\n',
+          'data: [DONE]\n\n'
+        ])
+      );
+    });
+
+    await client.polishDescription(
+      {
+        ...settings,
+        baseUrl: 'https://api.deepseek.com',
+        model: 'deepseek-v4-pro'
+      },
+      draft,
+      {
+        signal: new AbortController().signal,
+        onDelta: () => undefined
+      }
+    );
+
+    const body = JSON.parse(requestBody) as Record<string, unknown>;
+    expect(body.thinking).toEqual({ type: 'disabled' });
+    expect(body.max_tokens).toBe(4_096);
+  });
+
+  it('SSE 数据和中文字符跨网络分片时仍能完整解析', async () => {
+    const source =
+      'data: {"choices":[{"delta":{"content":"闲置好物"}}]}\n\ndata: [DONE]\n\n';
+    const bytes = new TextEncoder().encode(source);
+    const chineseByte = new TextEncoder().encode('闲').at(0);
+    const splitAt = bytes.findIndex((value) => value === chineseByte) + 1;
+    const client = createAiClient(() => Promise.resolve(byteStreamResponse(bytes, splitAt)));
+
+    const result = await client.polishDescription(settings, draft, {
+      signal: new AbortController().signal,
+      onDelta: () => undefined
+    });
+
+    expect(result.description).toBe('闲置好物');
+  });
+
+  it('主动取消润色时中止流读取并报告已取消', async () => {
+    const controller = new AbortController();
+    const response = new Response(new ReadableStream({ start: () => undefined }), {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' }
+    });
+    const client = createAiClient(() => Promise.resolve(response));
+    const operation = client.polishDescription(settings, draft, {
+      signal: controller.signal,
+      onDelta: () => undefined
+    });
+
+    controller.abort();
+
+    await expect(operation).rejects.toMatchObject({
+      code: 'OPERATION_CANCELLED',
+      message: 'AI 润色已停止'
+    });
+  });
+
+  it('流式错误不向界面暴露配置中的 API Key', async () => {
+    const client = createAiClient(() =>
+      Promise.resolve(
+        streamResponse([
+          'data: {"error":{"message":"Incorrect API key provided: secret-key"}}\n\n'
+        ])
+      )
+    );
+
+    const operation = client.polishDescription(settings, draft, {
+      signal: new AbortController().signal,
+      onDelta: () => undefined
+    });
+
+    await expect(operation).rejects.toMatchObject({
+      code: 'AI_INVALID_RESPONSE',
+      message: 'AI 流式响应返回错误'
+    });
+    await expect(operation).rejects.not.toThrow('secret-key');
+  });
+
+  it.each([
+    ['结束标记', 'data: [DONE]\n\n'],
+    ['无效事件', 'data: not-json\n\n']
+  ])('%s 后关闭仍保持连接的响应流', async (_label, event) => {
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(event));
+        },
+        cancel() {
+          cancelled = true;
+        }
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } }
+    );
+    const client = createAiClient(() => Promise.resolve(response));
+    const operation = client.polishDescription(settings, draft, {
+      signal: new AbortController().signal,
+      onDelta: () => undefined
+    });
+
+    await expect(operation).rejects.toMatchObject({ code: 'AI_INVALID_RESPONSE' });
+    expect(cancelled).toBe(true);
+  });
+
+  it('流式请求在响应头返回前超过时限也会结束', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createAiClient(() => new Promise<Response>(() => undefined));
+      const operation = client.polishDescription(settings, draft, {
+        signal: new AbortController().signal,
+        onDelta: () => undefined
+      });
+      const rejection = expect(operation).rejects.toMatchObject({
+        code: 'AI_NETWORK_ERROR',
+        message: 'AI 请求超时，请稍后重试'
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('持续收到分片时不会按整段请求时长提前中止', async () => {
+    vi.useFakeTimers();
+    try {
+      let streamController!: ReadableStreamDefaultController<Uint8Array>;
+      const encoder = new TextEncoder();
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(
+              encoder.encode('data: {"choices":[{"delta":{"content":"持续"}}]}\n\n')
+            );
+          }
+        }),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } }
+      );
+      const client = createAiClient(() => Promise.resolve(response));
+      const operation = client.polishDescription(settings, draft, {
+        signal: new AbortController().signal,
+        onDelta: () => undefined
+      });
+
+      await vi.advanceTimersByTimeAsync(25_000);
+      streamController.enqueue(
+        encoder.encode('data: {"choices":[{"delta":{"content":"输出"}}]}\n\n')
+      );
+      await vi.advanceTimersByTimeAsync(25_000);
+      streamController.enqueue(encoder.encode('data: [DONE]\n\n'));
+
+      await expect(operation).resolves.toMatchObject({ description: '持续输出' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('流式接口没有输出描述时拒绝写入空内容', async () => {
+    const client = createAiClient(() =>
+      Promise.resolve(streamResponse(['data: {"choices":[]}\n\ndata: [DONE]\n\n']))
+    );
+
+    await expect(
+      client.polishDescription(settings, draft, {
+        signal: new AbortController().signal,
+        onDelta: () => undefined
+      })
+    ).rejects.toMatchObject({ code: 'AI_INVALID_RESPONSE' });
+  });
+
   it('连接测试不强制启用 JSON mode', async () => {
     let requestBody = '';
     const client = createAiClient((_input, init) => {

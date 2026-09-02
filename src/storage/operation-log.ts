@@ -13,6 +13,8 @@ export interface OperationDraftSnapshot {
   price?: number;
   originalPrice?: number;
   shippingMethod?: string;
+  shippingFee?: number;
+  supportsPickup?: boolean;
   categoryNote?: string;
   selectedImageCount?: number;
   videoName?: string;
@@ -21,6 +23,7 @@ export interface OperationDraftSnapshot {
 export interface OperationSourceSummary {
   platform: ProductPlatform;
   canonicalUrl: string;
+  imageUrls?: string[];
   fields: {
     title: boolean;
     description: boolean;
@@ -135,6 +138,39 @@ function sanitizeLogId(value: string): string {
   return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(value) ? value : INVALID_LOG_ID_PLACEHOLDER;
 }
 
+function sanitizeImageUrl(value: string): string | undefined {
+  if (!isBoundedText(value, 4_096, false)) {
+    return undefined;
+  }
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return undefined;
+    }
+    url.username = '';
+    url.password = '';
+    url.hash = '';
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (/token|auth|key|sign|credential|expires|x-amz/iu.test(key)) {
+        url.searchParams.delete(key);
+      }
+    }
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeImageUrls(values: readonly string[] | undefined): string[] | undefined {
+  if (values === undefined) {
+    return undefined;
+  }
+  const sanitized = [
+    ...new Set(values.flatMap((value) => sanitizeImageUrl(value) ?? []).slice(0, 9))
+  ];
+  return sanitized.length === 0 ? undefined : sanitized;
+}
+
 function sanitizeDraftSnapshot(draft: OperationDraftSnapshot): OperationDraftSnapshot | undefined {
   const sourceUrl =
     draft.sourceUrl === undefined ? undefined : sanitizeProductLogUrl(draft.sourceUrl);
@@ -161,6 +197,12 @@ function sanitizeDraftSnapshot(draft: OperationDraftSnapshot): OperationDraftSna
     Number.isFinite(draft.originalPrice) && (draft.originalPrice ?? 0) > 0
       ? draft.originalPrice
       : undefined;
+  const shippingFee =
+    Number.isFinite(draft.shippingFee) && (draft.shippingFee ?? 0) > 0
+      ? draft.shippingFee
+      : undefined;
+  const supportsPickup =
+    typeof draft.supportsPickup === 'boolean' ? draft.supportsPickup : undefined;
   const selectedImageCount =
     Number.isInteger(draft.selectedImageCount) &&
     (draft.selectedImageCount ?? -1) >= 0 &&
@@ -175,6 +217,8 @@ function sanitizeDraftSnapshot(draft: OperationDraftSnapshot): OperationDraftSna
     ...(price === undefined ? {} : { price }),
     ...(originalPrice === undefined ? {} : { originalPrice }),
     ...(shippingMethod === undefined ? {} : { shippingMethod }),
+    ...(shippingFee === undefined ? {} : { shippingFee }),
+    ...(supportsPickup === undefined ? {} : { supportsPickup }),
     ...(categoryNote === undefined ? {} : { categoryNote }),
     ...(selectedImageCount === undefined ? {} : { selectedImageCount }),
     ...(videoName === undefined ? {} : { videoName })
@@ -183,15 +227,12 @@ function sanitizeDraftSnapshot(draft: OperationDraftSnapshot): OperationDraftSna
 }
 
 function isProductPlatform(value: unknown): value is ProductPlatform {
-  return (
-    value === 'taobao' || value === 'tmall' || value === 'jd' || value === 'generic'
-  );
+  return value === 'taobao' || value === 'tmall' || value === 'jd' || value === 'generic';
 }
 
-function sanitizeSourceSummary(
-  source: OperationSourceSummary
-): OperationSourceSummary | undefined {
+function sanitizeSourceSummary(source: OperationSourceSummary): OperationSourceSummary | undefined {
   const canonicalUrl = sanitizeProductLogUrl(source.canonicalUrl);
+  const imageUrls = sanitizeImageUrls(source.imageUrls);
   if (
     !isProductPlatform(source.platform) ||
     canonicalUrl === undefined ||
@@ -206,6 +247,7 @@ function sanitizeSourceSummary(
   return {
     platform: source.platform,
     canonicalUrl,
+    ...(imageUrls === undefined ? {} : { imageUrls }),
     fields: {
       title: source.fields.title,
       description: source.fields.description,
@@ -255,9 +297,21 @@ function parseSourceSummary(value: unknown): OperationSourceSummary | undefined 
   ) {
     return undefined;
   }
+  const imageUrls =
+    value.imageUrls === undefined
+      ? undefined
+      : Array.isArray(value.imageUrls) &&
+          value.imageUrls.length <= 100 &&
+          value.imageUrls.every((url) => isBoundedText(url, 4_096, false))
+        ? value.imageUrls
+        : null;
+  if (imageUrls === null) {
+    return undefined;
+  }
   return sanitizeSourceSummary({
     platform: value.platform,
     canonicalUrl: value.canonicalUrl,
+    ...(imageUrls === undefined ? {} : { imageUrls }),
     fields: {
       title: value.fields.title,
       description: value.fields.description,
@@ -313,6 +367,12 @@ function parseDraftSnapshot(value: unknown): OperationDraftSnapshot | undefined 
   const shippingMethod = isBoundedText(value.shippingMethod, MAX_LOG_TITLE_LENGTH)
     ? value.shippingMethod
     : undefined;
+  const shippingFee =
+    typeof value.shippingFee === 'number' && Number.isFinite(value.shippingFee)
+      ? value.shippingFee
+      : undefined;
+  const supportsPickup =
+    typeof value.supportsPickup === 'boolean' ? value.supportsPickup : undefined;
   const categoryNote = isBoundedText(value.categoryNote, MAX_LOG_TEXT_LENGTH)
     ? value.categoryNote
     : undefined;
@@ -331,6 +391,8 @@ function parseDraftSnapshot(value: unknown): OperationDraftSnapshot | undefined 
     ...(price === undefined ? {} : { price }),
     ...(originalPrice === undefined ? {} : { originalPrice }),
     ...(shippingMethod === undefined ? {} : { shippingMethod }),
+    ...(shippingFee === undefined ? {} : { shippingFee }),
+    ...(supportsPickup === undefined ? {} : { supportsPickup }),
     ...(categoryNote === undefined ? {} : { categoryNote }),
     ...(selectedImageCount === undefined ? {} : { selectedImageCount }),
     ...(videoName === undefined ? {} : { videoName })

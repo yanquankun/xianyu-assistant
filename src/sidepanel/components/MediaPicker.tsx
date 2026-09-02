@@ -8,6 +8,7 @@ import {
 } from '../../domain/product';
 import { MAX_MEDIA_COUNT } from '../../media/validation';
 import type { StoredMediaAsset } from '../../storage/media-store';
+import { isXianyuVideoUploadEnabled } from '../../xianyu/features';
 import { MediaPreviewDialog } from './MediaPreviewDialog';
 
 export interface MediaPickerProps {
@@ -119,11 +120,7 @@ function LocalImageThumbnail({
   );
 }
 
-function LocalVideoThumbnail({
-  assetId,
-  label,
-  resolveLocalAsset
-}: LocalVideoThumbnailProps) {
+function LocalVideoThumbnail({ assetId, label, resolveLocalAsset }: LocalVideoThumbnailProps) {
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const resolveLocalAssetRef = useRef(resolveLocalAsset);
@@ -165,9 +162,7 @@ function LocalVideoThumbnail({
 
   if (thumbnailUrl === null) {
     return (
-      <span className="video-tile__placeholder">
-        {thumbnailFailed ? '封面不可用' : '加载中'}
-      </span>
+      <span className="video-tile__placeholder">{thumbnailFailed ? '封面不可用' : '加载中'}</span>
     );
   }
 
@@ -305,14 +300,17 @@ export function MediaPicker({
     }
   };
 
-  const mediaCount = images.length + videos.length;
-  const mediaLimitReached = mediaCount >= MAX_MEDIA_COUNT;
+  const videoUploadEnabled = isXianyuVideoUploadEnabled();
+  const storedMediaCount = images.length + videos.length;
+  const displayedMediaCount = videoUploadEnabled ? storedMediaCount : images.length;
+  const mediaLimitReached = storedMediaCount >= MAX_MEDIA_COUNT;
 
   return (
     <>
       <div className="media-toolbar">
         <span>
-          媒体 {String(mediaCount)}/{String(MAX_MEDIA_COUNT)}
+          {videoUploadEnabled ? '媒体' : '图片'} {String(displayedMediaCount)}/
+          {String(MAX_MEDIA_COUNT)}
         </span>
         <input
           ref={imageInput}
@@ -412,84 +410,88 @@ export function MediaPicker({
           );
         })}
       </div>
-      <div className="video-card video-card--upload">
-        <div>
-          <strong>商品视频</strong>
-          <p>可选 MP4 或 MOV，单个最多 100 MB</p>
-        </div>
-        <div className="media-tile-actions">
-          <input
-            ref={videoInput}
-            className="media-file-input"
-            aria-label="上传商品视频"
-            type="file"
-            accept="video/mp4,video/quicktime,.mp4,.mov"
-            multiple
-            disabled={mediaLimitReached || isUploadingVideos}
-            onChange={(event) => {
-              const files = Array.from(event.currentTarget.files ?? []);
-              onUploadVideos(files);
-              event.currentTarget.value = '';
-            }}
-          />
-          <button
-            type="button"
-            className="button button--quiet"
-            aria-busy={isUploadingVideos}
-            disabled={mediaLimitReached || isUploadingVideos}
-            onClick={() => videoInput.current?.click()}
-          >
-            {isUploadingVideos ? '上传中…' : '上传视频'}
-          </button>
-        </div>
-      </div>
-      <div className="video-grid" aria-label="商品视频">
-        {videos.map((video, index) => {
-          const videoNumber = index + 1;
-          const label = `商品视频 ${String(videoNumber)}`;
-          const previewLoading = loadingPreview === video.assetId;
-          return (
-            <div className="video-tile" key={video.id}>
-              <button
-                type="button"
-                className="video-tile__preview"
-                aria-label={`播放${label}`}
-                disabled={previewLoading}
-                onClick={(event) =>
-                  void openLocalPreview(video.assetId, 'video', label, event.currentTarget)
-                }
-              >
-                <LocalVideoThumbnail
-                  assetId={video.assetId}
-                  label={label}
-                  resolveLocalAsset={resolveLocalAsset}
-                />
-                <span className="video-tile__play" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" focusable="false">
-                    <path d="M8.25 5.6v12.8L18.5 12 8.25 5.6Z" />
-                  </svg>
-                </span>
-                <span className="video-tile__meta">
-                  <strong title={video.fileName}>{video.fileName}</strong>
-                  <span>{formatByteLength(video.byteLength)}</span>
-                </span>
-              </button>
-              <button
-                type="button"
-                className="video-tile__remove"
-                aria-label={`删除${label}`}
-                title={`删除${label}`}
-                onClick={() => {
-                  invalidatePreview();
-                  onRemoveVideo(video.id);
+      {videoUploadEnabled ? (
+        <>
+          <div className="video-card video-card--upload">
+            <div>
+              <strong>商品视频</strong>
+              <p>可选 MP4 或 MOV，单个最多 100 MB</p>
+            </div>
+            <div className="media-tile-actions">
+              <input
+                ref={videoInput}
+                className="media-file-input"
+                aria-label="上传商品视频"
+                type="file"
+                accept="video/mp4,video/quicktime,.mp4,.mov"
+                multiple
+                disabled={mediaLimitReached || isUploadingVideos}
+                onChange={(event) => {
+                  const files = Array.from(event.currentTarget.files ?? []);
+                  onUploadVideos(files);
+                  event.currentTarget.value = '';
                 }}
+              />
+              <button
+                type="button"
+                className="button button--quiet"
+                aria-busy={isUploadingVideos}
+                disabled={mediaLimitReached || isUploadingVideos}
+                onClick={() => videoInput.current?.click()}
               >
-                删除
+                {isUploadingVideos ? '上传中…' : '上传视频'}
               </button>
             </div>
-          );
-        })}
-      </div>
+          </div>
+          <div className="video-grid" aria-label="商品视频">
+            {videos.map((video, index) => {
+              const videoNumber = index + 1;
+              const label = `商品视频 ${String(videoNumber)}`;
+              const previewLoading = loadingPreview === video.assetId;
+              return (
+                <div className="video-tile" key={video.id}>
+                  <button
+                    type="button"
+                    className="video-tile__preview"
+                    aria-label={`播放${label}`}
+                    disabled={previewLoading}
+                    onClick={(event) =>
+                      void openLocalPreview(video.assetId, 'video', label, event.currentTarget)
+                    }
+                  >
+                    <LocalVideoThumbnail
+                      assetId={video.assetId}
+                      label={label}
+                      resolveLocalAsset={resolveLocalAsset}
+                    />
+                    <span className="video-tile__play" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" focusable="false">
+                        <path d="M8.25 5.6v12.8L18.5 12 8.25 5.6Z" />
+                      </svg>
+                    </span>
+                    <span className="video-tile__meta">
+                      <strong title={video.fileName}>{video.fileName}</strong>
+                      <span>{formatByteLength(video.byteLength)}</span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="video-tile__remove"
+                    aria-label={`删除${label}`}
+                    title={`删除${label}`}
+                    onClick={() => {
+                      invalidatePreview();
+                      onRemoveVideo(video.id);
+                    }}
+                  >
+                    删除
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
       <MediaPreviewDialog media={preview} onClose={invalidatePreview} />
     </>
   );

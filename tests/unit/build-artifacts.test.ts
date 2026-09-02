@@ -9,6 +9,9 @@ import devConfig from '../../wxt.dev.config';
 const projectRoot = process.cwd();
 const distDirectory = resolve(projectRoot, 'dist');
 const outputUnpackedDirectory = resolve(projectRoot, '.output/chrome-mv3');
+const packageJson = JSON.parse(
+  readFileSync(resolve(projectRoot, 'package.json'), 'utf8')
+) as { name: string; version: string };
 
 describe('Chrome 构建产物', () => {
   it('build 同时生成 CRX、商店 ZIP 和生产解压目录', () => {
@@ -20,8 +23,9 @@ describe('Chrome 构建产物', () => {
       stdio: 'pipe'
     });
 
-    const zipPath = resolve(distDirectory, 'xianyu-assistant-0.1.0-chrome.zip');
-    const crxPath = resolve(distDirectory, 'xianyu-assistant-0.1.0-chrome.crx');
+    const artifactPrefix = `${packageJson.name}-${packageJson.version}`;
+    const zipPath = resolve(distDirectory, `${artifactPrefix}-chrome.zip`);
+    const crxPath = resolve(distDirectory, `${artifactPrefix}-chrome.crx`);
 
     expect(existsSync(zipPath)).toBe(true);
     expect(readFileSync(zipPath).subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
@@ -29,10 +33,14 @@ describe('Chrome 构建产物', () => {
     expect(readFileSync(crxPath).subarray(0, 4)).toEqual(Buffer.from('Cr24', 'ascii'));
     const manifestPath = resolve(outputUnpackedDirectory, 'manifest.json');
     expect(existsSync(manifestPath)).toBe(true);
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { description?: unknown };
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+      description?: unknown;
+      version?: unknown;
+    };
     expect(manifest.description).toBe(
       '解析淘宝、天猫和京东商品，生成可编辑文案并填入闲鱼发布页。'
     );
+    expect(manifest.version).toBe(packageJson.version);
     expect(existsSync(resolve(distDirectory, 'xianyu-assistant-unpacked'))).toBe(false);
   }, 60_000);
 

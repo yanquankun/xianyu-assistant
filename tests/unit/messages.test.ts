@@ -28,6 +28,7 @@ const draft = {
   warnings: [],
   confidence: 'high',
   shippingMethod: '包邮',
+  supportsPickup: false,
   categoryNote: '',
   updatedAt: '2026-08-31T12:00:00.000Z'
 };
@@ -215,12 +216,12 @@ describe('parseStoredProductDraft', () => {
   it.each(['', 'not-a-url', 'https://item.taobao.com/item.htm?id=1'])(
     '旧淘宝草稿的规范链接为 %s 时保持原平台',
     (canonicalUrl) => {
-      expect(
-        parseStoredProductDraft({ ...draft, platform: 'taobao', canonicalUrl })
-      ).toMatchObject({
-        migrated: false,
-        draft: { platform: 'taobao' }
-      });
+      expect(parseStoredProductDraft({ ...draft, platform: 'taobao', canonicalUrl })).toMatchObject(
+        {
+          migrated: false,
+          draft: { platform: 'taobao' }
+        }
+      );
     }
   );
 

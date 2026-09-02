@@ -1,4 +1,13 @@
-import { normalizeChatCompletionsUrl, type AiConnectionResult } from '../ai/client';
+import {
+  AiClientError,
+  createAiClient,
+  normalizeChatCompletionsUrl,
+  type AiConnectionResult
+} from '../ai/client';
+import {
+  createAiPolishFailureLogEntry,
+  createAiPolishSuccessLogEntry
+} from '../background/operation-log-factory';
 import { createFailureLogEntry } from '../background/operation-log-factory';
 import type { ExpansionPreview } from '../ai/validation';
 import {
@@ -113,6 +122,7 @@ function sourceOrigins(draft: ProductDraft): string[] {
 export function createBrowserSidePanelServices(): SidePanelServices {
   const store = createLocalStore(storageArea());
   const mediaStore = createMediaStore(indexedDB);
+  const aiClient = createAiClient(fetch);
   return {
     loadSettings(): Promise<AiSettings | null> {
       return store.getSettings();
@@ -178,6 +188,48 @@ export function createBrowserSidePanelServices(): SidePanelServices {
       return send<ExpansionPreview>(message);
     },
 
+    async polishDescription(settings, draft, options) {
+      try {
+        const url = normalizeChatCompletionsUrl(settings.baseUrl);
+        await requestOrigins([getRequestedOrigin(url)]);
+        const result = await aiClient.polishDescription(settings, draft, options);
+        void store
+          .appendLog(
+            createAiPolishSuccessLogEntry(
+              draft,
+              result,
+              operationId(),
+              new Date().toISOString()
+            )
+          )
+          .catch(() => console.error('运行记录保存失败'));
+        return result;
+      } catch (error) {
+        if (error instanceof AiClientError && error.code === 'OPERATION_CANCELLED') {
+          throw error;
+        }
+        const message = error instanceof Error ? error.message : 'AI 润色失败';
+        const code =
+          error instanceof AiClientError
+            ? error.code
+            : message.includes('未获得页面访问权限')
+              ? 'PERMISSION_DENIED'
+              : 'AI_NETWORK_ERROR';
+        void store
+          .appendLog(
+            createAiPolishFailureLogEntry(
+              draft,
+              message,
+              code,
+              operationId(),
+              new Date().toISOString()
+            )
+          )
+          .catch(() => console.error('运行记录保存失败'));
+        throw error;
+      }
+    },
+
     async checkXianyuLogin(): Promise<XianyuLoginCheckResult> {
       const value = await send<unknown>({ type: 'CHECK_XIANYU_LOGIN' });
       const result = parseXianyuLoginCheckResult(value);
@@ -207,6 +259,10 @@ export function createBrowserSidePanelServices(): SidePanelServices {
 
     loadLogs(): Promise<OperationLogEntry[]> {
       return store.getLogs();
+    },
+
+    clearLogs(): Promise<void> {
+      return store.clearLogs();
     }
   };
 }

@@ -14,7 +14,7 @@ export default defineConfig({
   manifest: ({ mode }) => ({
     name: '闲鱼上架助手',
     description: '解析淘宝、天猫和京东商品，生成可编辑文案并填入闲鱼发布页。',
-    version: '0.1.0',
+    version: '0.1.3',
     minimum_chrome_version: '116',
     permissions: REQUIRED_PERMISSIONS,
     host_permissions: [

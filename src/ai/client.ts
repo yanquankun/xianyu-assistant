@@ -1,8 +1,19 @@
 import type { AppErrorCode } from '../domain/errors';
 import type { ProductDraft } from '../domain/product';
 import type { AiSettings } from '../domain/settings';
-import { buildConnectionMessages, buildExpansionMessages, type ChatMessage } from './prompts';
-import { validateExpansion, type ExpansionPreview } from './validation';
+import {
+  buildConnectionMessages,
+  buildDescriptionPolishMessages,
+  buildExpansionMessages,
+  type ChatMessage,
+  type DescriptionPolishContext
+} from './prompts';
+import {
+  validateExpansion,
+  validatePolishedDescription,
+  type DescriptionPolishResult,
+  type ExpansionPreview
+} from './validation';
 
 export class AiClientError extends Error {
   readonly code: AppErrorCode;
@@ -22,6 +33,16 @@ export interface AiConnectionResult {
 export interface AiClient {
   testConnection(settings: AiSettings): Promise<AiConnectionResult>;
   expandDraft(settings: AiSettings, draft: ProductDraft): Promise<ExpansionPreview>;
+  polishDescription(
+    settings: AiSettings,
+    draft: ProductDraft,
+    options: DescriptionPolishOptions
+  ): Promise<DescriptionPolishResult>;
+}
+
+export interface DescriptionPolishOptions {
+  signal: AbortSignal;
+  onDelta: (delta: string) => void;
 }
 
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -29,6 +50,15 @@ export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promis
 const AI_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_AI_CONTENT_LENGTH = 20_000;
 const MAX_AI_RESPONSE_BYTES = 1_000_000;
+const MAX_POLISHED_DESCRIPTION_LENGTH = 5_000;
+const MAX_DEEPSEEK_POLISH_COMPLETION_TOKENS = 4_096;
+
+const POLISH_PLATFORM_LABELS: Record<ProductDraft['platform'], DescriptionPolishContext['platform']> = {
+  taobao: '淘宝',
+  tmall: '天猫',
+  jd: '京东',
+  generic: '其他来源'
+};
 
 function validateSettings(settings: AiSettings): void {
   if (settings.apiKey.trim().length === 0 || settings.model.trim().length === 0) {
@@ -187,6 +217,231 @@ async function requestChat(
   }
 }
 
+function readStreamDelta(payload: unknown): string[] {
+  if (!isRecord(payload)) {
+    throw new AiClientError('AI_INVALID_RESPONSE', 'AI 流式响应格式无效');
+  }
+  if (isRecord(payload.error)) {
+    throw new AiClientError('AI_INVALID_RESPONSE', 'AI 流式响应返回错误');
+  }
+  if (!Array.isArray(payload.choices)) {
+    throw new AiClientError('AI_INVALID_RESPONSE', 'AI 流式响应缺少 choices');
+  }
+  const deltas: string[] = [];
+  for (const choice of payload.choices as unknown[]) {
+    if (!isRecord(choice) || !isRecord(choice.delta)) {
+      continue;
+    }
+    const content = choice.delta.content;
+    if (content === undefined || content === null) {
+      continue;
+    }
+    if (typeof content !== 'string') {
+      throw new AiClientError('AI_INVALID_RESPONSE', 'AI 流式响应包含无效内容');
+    }
+    if (content.length > 0) {
+      deltas.push(content);
+    }
+  }
+  return deltas;
+}
+
+function eventBoundary(buffer: string): { index: number; length: number } | null {
+  const match = /\r?\n\r?\n/u.exec(buffer);
+  return match?.index === undefined ? null : { index: match.index, length: match[0].length };
+}
+
+function isRequestAborted(signal: AbortSignal): boolean {
+  return signal.aborted;
+}
+
+function isDeepSeekHost(url: URL): boolean {
+  const hostname = url.hostname.toLowerCase();
+  return hostname === 'deepseek.com' || hostname.endsWith('.deepseek.com');
+}
+
+async function requestChatStream(
+  fetchImpl: FetchLike,
+  settings: AiSettings,
+  messages: readonly ChatMessage[],
+  options: DescriptionPolishOptions
+): Promise<string> {
+  validateSettings(settings);
+  if (isRequestAborted(options.signal)) {
+    throw new AiClientError('OPERATION_CANCELLED', 'AI 润色已停止');
+  }
+  const url = normalizeChatCompletionsUrl(settings.baseUrl);
+  const controller = new AbortController();
+  let timedOut = false;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  const abortRequest = () => {
+    controller.abort();
+    void reader?.cancel().catch(() => undefined);
+  };
+  options.signal.addEventListener('abort', abortRequest, { once: true });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let rejectTimeout: (error: AiClientError) => void = () => undefined;
+  const timeoutRequest = new Promise<never>((_resolve, reject) => {
+    rejectTimeout = reject;
+  });
+  const resetInactivityTimeout = () => {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+    timeout = setTimeout(() => {
+      timedOut = true;
+      abortRequest();
+      rejectTimeout(new AiClientError('AI_NETWORK_ERROR', 'AI 请求超时，请稍后重试'));
+    }, AI_REQUEST_TIMEOUT_MS);
+  };
+  resetInactivityTimeout();
+  const hasTimedOut = () => timedOut;
+  try {
+    const response = await Promise.race([
+      fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${settings.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: settings.model,
+          temperature: settings.temperature,
+          stream: true,
+          ...(isDeepSeekHost(url)
+            ? {
+                thinking: { type: 'disabled' },
+                max_tokens: MAX_DEEPSEEK_POLISH_COMPLETION_TOKENS
+              }
+            : {}),
+          messages
+        }),
+        signal: controller.signal
+      }),
+      timeoutRequest
+    ]);
+    resetInactivityTimeout();
+    if (!response.ok) {
+      throw errorForStatus(response.status);
+    }
+    if (response.body === null) {
+      throw new AiClientError('AI_INVALID_RESPONSE', 'AI 流式响应没有正文');
+    }
+    reader = response.body.getReader();
+    if (isRequestAborted(options.signal)) {
+      await reader.cancel().catch(() => undefined);
+      throw new AiClientError('OPERATION_CANCELLED', 'AI 润色已停止');
+    }
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let rawResponse = '';
+    let content = '';
+    let totalBytes = 0;
+
+    const processEvents = (flush: boolean): boolean => {
+      if (flush && buffer.length > 0) {
+        buffer += '\n\n';
+      }
+      for (;;) {
+        const boundary = eventBoundary(buffer);
+        if (boundary === null) {
+          return false;
+        }
+        const event = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary.length);
+        const data = event
+          .split(/\r?\n/u)
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).replace(/^ /u, ''))
+          .join('\n');
+        if (data.length === 0) {
+          continue;
+        }
+        if (data === '[DONE]') {
+          return true;
+        }
+        let payload: unknown;
+        try {
+          payload = JSON.parse(data);
+        } catch {
+          throw new AiClientError('AI_INVALID_RESPONSE', 'AI 流式响应包含无效 JSON');
+        }
+        for (const delta of readStreamDelta(payload)) {
+          content += delta;
+          if (content.length > MAX_POLISHED_DESCRIPTION_LENGTH) {
+            throw new AiClientError('AI_INVALID_RESPONSE', 'AI 描述超过 5000 个字符');
+          }
+          options.onDelta(delta);
+        }
+      }
+    };
+
+    for (;;) {
+      const chunk = await reader.read();
+      if (isRequestAborted(options.signal)) {
+        throw new AiClientError('OPERATION_CANCELLED', 'AI 润色已停止');
+      }
+      if (hasTimedOut()) {
+        throw new AiClientError('AI_NETWORK_ERROR', 'AI 请求超时，请稍后重试');
+      }
+      if (chunk.done) {
+        const decoded = decoder.decode();
+        buffer += decoded;
+        rawResponse += decoded;
+        processEvents(true);
+        break;
+      }
+      resetInactivityTimeout();
+      totalBytes += chunk.value.byteLength;
+      if (totalBytes > MAX_AI_RESPONSE_BYTES) {
+        throw new AiClientError('AI_INVALID_RESPONSE', 'AI 响应数据过大');
+      }
+      const decoded = decoder.decode(chunk.value, { stream: true });
+      buffer += decoded;
+      rawResponse += decoded;
+      if (processEvents(false)) {
+        break;
+      }
+    }
+    if (content.trim().length === 0 && rawResponse.trimStart().startsWith('{')) {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(rawResponse);
+      } catch {
+        throw new AiClientError('AI_INVALID_RESPONSE', 'AI 接口没有返回有效的流式数据');
+      }
+      const fallbackContent = extractContent(payload);
+      content = fallbackContent;
+      options.onDelta(fallbackContent);
+    }
+    return content;
+  } catch (error) {
+    if (isRequestAborted(options.signal)) {
+      throw new AiClientError('OPERATION_CANCELLED', 'AI 润色已停止');
+    }
+    if (hasTimedOut()) {
+      throw new AiClientError('AI_NETWORK_ERROR', 'AI 请求超时，请稍后重试');
+    }
+    if (error instanceof AiClientError) {
+      throw error;
+    }
+    throw new AiClientError('AI_NETWORK_ERROR', '无法连接 AI 接口，请检查地址和网络');
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+    options.signal.removeEventListener('abort', abortRequest);
+    if (reader !== null) {
+      await reader.cancel().catch(() => undefined);
+      try {
+        reader.releaseLock();
+      } catch {
+        // The stream may already have released its lock after cancellation.
+      }
+    }
+  }
+}
+
 export function createAiClient(fetchImpl: FetchLike): AiClient {
   return {
     async testConnection(settings: AiSettings): Promise<AiConnectionResult> {
@@ -211,6 +466,37 @@ export function createAiClient(fetchImpl: FetchLike): AiClient {
         return validateExpansion(parsed, draft);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'AI 文案结构无效';
+        throw new AiClientError('AI_INVALID_RESPONSE', message);
+      }
+    },
+
+    async polishDescription(
+      settings: AiSettings,
+      draft: ProductDraft,
+      options: DescriptionPolishOptions
+    ): Promise<DescriptionPolishResult> {
+      const polishContext: DescriptionPolishContext = {
+        platform: POLISH_PLATFORM_LABELS[draft.platform],
+        title: draft.title,
+        price: draft.price,
+        ...(draft.originalPrice === undefined ? {} : { originalPrice: draft.originalPrice }),
+        currency: draft.currency,
+        description: draft.description,
+        shippingMethod: draft.shippingMethod,
+        ...(draft.shippingFee === undefined ? {} : { shippingFee: draft.shippingFee }),
+        supportsPickup: draft.supportsPickup,
+        categoryNote: draft.categoryNote
+      };
+      const description = await requestChatStream(
+        fetchImpl,
+        settings,
+        buildDescriptionPolishMessages(settings.systemInstruction, polishContext),
+        options
+      );
+      try {
+        return validatePolishedDescription(description, draft);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'AI 描述结构无效';
         throw new AiClientError('AI_INVALID_RESPONSE', message);
       }
     }

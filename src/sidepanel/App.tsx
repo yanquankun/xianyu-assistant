@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 
 import type { AiConnectionResult } from '../ai/client';
-import type { ExpansionPreview as ExpansionPreviewValue } from '../ai/validation';
+import type { DescriptionPolishOptions } from '../ai/client';
+import type {
+  DescriptionPolishResult,
+  ExpansionPreview as ExpansionPreviewValue
+} from '../ai/validation';
 import { getLocalAssetIds, type ParsedProduct, type ProductDraft } from '../domain/product';
 import type { AiSettings } from '../domain/settings';
 import {
@@ -23,6 +27,7 @@ import { ConfirmDialog } from './components/ConfirmDialog';
 import { LoginBanner } from './components/LoginBanner';
 import { OperationLog } from './components/OperationLog';
 import { ProductEditor } from './components/ProductEditor';
+import { createTextTypewriter, type TextTypewriter } from './text-typewriter';
 import {
   createManualDraft,
   draftNeedsResetConfirmation,
@@ -46,11 +51,17 @@ export interface SidePanelServices {
   parseProduct(url: string): Promise<ParsedProduct>;
   testAiConnection(settings: AiSettings): Promise<AiConnectionResult>;
   expandDraft(settings: AiSettings, draft: ProductDraft): Promise<ExpansionPreviewValue>;
+  polishDescription(
+    settings: AiSettings,
+    draft: ProductDraft,
+    options: DescriptionPolishOptions
+  ): Promise<DescriptionPolishResult>;
   checkXianyuLogin(): Promise<XianyuLoginCheckResult>;
   fillDraft(draft: ProductDraft): Promise<FillResult>;
   openXianyuLogin(): Promise<void>;
   getPanelSide(): Promise<PanelSide>;
   loadLogs(): Promise<OperationLogEntry[]>;
+  clearLogs(): Promise<void>;
 }
 
 const EMPTY_SETTINGS: AiSettings = {
@@ -72,6 +83,14 @@ interface ResetConfirmation {
   draftUpdatedAt: string;
 }
 
+interface DescriptionPolishSession {
+  requestId: number;
+  draftId: string;
+  originalDescription: string;
+  streamedDescription: string;
+  status: 'streaming' | 'completed';
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '操作失败，请重试';
 }
@@ -82,33 +101,65 @@ function operationId(): string {
     : `operation-${String(Date.now())}`;
 }
 
-export function App({ services }: { services: SidePanelServices }) {
+export function App({
+  services,
+  appVersion
+}: {
+  services: SidePanelServices;
+  appVersion?: string;
+}) {
   const [state, dispatch] = useReducer(reduceWorkflow, initialWorkflowState);
   const [settings, setSettings] = useState<AiSettings>(EMPTY_SETTINGS);
   const [settingsStatus, setSettingsStatus] = useState('');
   const [loginMessage, setLoginMessage] = useState('');
   const [isLoginRefreshing, setIsLoginRefreshing] = useState(false);
   const [logs, setLogs] = useState<OperationLogEntry[]>([]);
+  const [isDeleteLogsConfirmationOpen, setIsDeleteLogsConfirmationOpen] = useState(false);
+  const [isDeletingLogs, setIsDeletingLogs] = useState(false);
+  const [deleteLogsError, setDeleteLogsError] = useState('');
   const [panelSide, setPanelSide] = useState<PanelSide>('unknown');
   const [resetConfirmation, setResetConfirmation] = useState<ResetConfirmation | null>(null);
   const [isResetting, setIsResetting] = useState(false);
   const [isUploadingImages, setIsUploadingImages] = useState(false);
   const [isUploadingVideos, setIsUploadingVideos] = useState(false);
+  const [descriptionPolish, setDescriptionPolish] = useState<DescriptionPolishSession | null>(null);
+  const [isRestoreConfirmationOpen, setIsRestoreConfirmationOpen] = useState(false);
   const draftSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const latestDraftRef = useRef<ProductDraft | null>(null);
   const sourceInputRef = useRef<HTMLInputElement>(null);
   const returnToStartButtonRef = useRef<HTMLButtonElement>(null);
+  const aiPolishButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreDescriptionButtonRef = useRef<HTMLButtonElement>(null);
   const focusSourceAfterResetRef = useRef(false);
   const focusReturnAfterDialogRef = useRef(false);
+  const restoreDescriptionFocusTargetRef = useRef<'polish' | 'restore' | null>(null);
   const workflowGenerationRef = useRef(0);
   const initializationGenerationRef = useRef(0);
   const imageUploadRequestRef = useRef(0);
   const videoUploadRequestRef = useRef(0);
-  const mediaSlotReservationsRef = useRef(
-    new Map<string, { draftId: string; count: number }>()
-  );
+  const mediaSlotReservationsRef = useRef(new Map<string, { draftId: string; count: number }>());
   const loginCheckRequestRef = useRef(0);
   const pendingMediaAssetIdsRef = useRef(new Set<string>());
+  const descriptionPolishRequestRef = useRef<{
+    requestId: number;
+    controller: AbortController;
+  } | null>(null);
+  const descriptionPolishRequestIdRef = useRef(0);
+  const descriptionTypewriterRef = useRef<{
+    requestId: number;
+    player: TextTypewriter;
+  } | null>(null);
+
+  const cancelDescriptionTypewriter = () => {
+    descriptionTypewriterRef.current?.player.cancel();
+    descriptionTypewriterRef.current = null;
+  };
+
+  const clearDescriptionTypewriter = (requestId: number) => {
+    if (descriptionTypewriterRef.current?.requestId === requestId) {
+      descriptionTypewriterRef.current = null;
+    }
+  };
 
   const checkXianyuLogin = useCallback(
     async (isRefreshRequest: boolean): Promise<void> => {
@@ -144,12 +195,34 @@ export function App({ services }: { services: SidePanelServices }) {
     latestDraftRef.current = state.draft;
   }, [state.draft]);
 
+  useEffect(
+    () => () => {
+      descriptionPolishRequestRef.current?.controller.abort();
+      descriptionPolishRequestRef.current = null;
+      cancelDescriptionTypewriter();
+    },
+    []
+  );
+
   useEffect(() => {
     if (resetConfirmation === null && focusReturnAfterDialogRef.current) {
       focusReturnAfterDialogRef.current = false;
       returnToStartButtonRef.current?.focus();
     }
   }, [resetConfirmation]);
+
+  useEffect(() => {
+    if (isRestoreConfirmationOpen || restoreDescriptionFocusTargetRef.current === null) {
+      return;
+    }
+    const target = restoreDescriptionFocusTargetRef.current;
+    restoreDescriptionFocusTargetRef.current = null;
+    if (target === 'restore') {
+      restoreDescriptionButtonRef.current?.focus();
+      return;
+    }
+    aiPolishButtonRef.current?.focus();
+  }, [isRestoreConfirmationOpen]);
 
   useEffect(() => {
     if (state.draft === null && focusSourceAfterResetRef.current) {
@@ -239,6 +312,12 @@ export function App({ services }: { services: SidePanelServices }) {
   }, [services, state.activeView]);
 
   const parseProduct = async () => {
+    descriptionPolishRequestRef.current?.controller.abort();
+    descriptionPolishRequestRef.current = null;
+    cancelDescriptionTypewriter();
+    descriptionPolishRequestIdRef.current += 1;
+    setDescriptionPolish(null);
+    setIsRestoreConfirmationOpen(false);
     imageUploadRequestRef.current += 1;
     videoUploadRequestRef.current += 1;
     setIsUploadingImages(false);
@@ -265,38 +344,139 @@ export function App({ services }: { services: SidePanelServices }) {
     }
   };
 
-  const expandDraft = async () => {
-    if (state.draft === null) {
+  const restoreDescription = (draftId: string, description: string): void => {
+    const draft = latestDraftRef.current;
+    if (draft?.id !== draftId || draft.description === description) {
       return;
     }
-    const draft = state.draft;
-    const draftId = draft.id;
-    const draftUpdatedAt = draft.updatedAt;
-    const workflowGeneration = workflowGenerationRef.current;
-    dispatch({ type: 'EXPANSION_STARTED', draftId, draftUpdatedAt });
+    dispatch({
+      type: 'DRAFT_CHANGED',
+      draft: { ...draft, description, updatedAt: new Date().toISOString() }
+    });
+  };
+
+  const polishDescription = async () => {
+    const draft = latestDraftRef.current;
+    if (draft === null || draft.description.trim().length === 0) {
+      return;
+    }
+    const requestId = descriptionPolishRequestIdRef.current + 1;
+    descriptionPolishRequestIdRef.current = requestId;
+    const controller = new AbortController();
+    descriptionPolishRequestRef.current = { requestId, controller };
+    const originalDescription =
+      descriptionPolish?.draftId === draft.id
+        ? descriptionPolish.originalDescription
+        : draft.description;
+    setDescriptionPolish({
+      requestId,
+      draftId: draft.id,
+      originalDescription,
+      streamedDescription: '',
+      status: 'streaming'
+    });
+    dispatch({ type: 'AI_POLISH_STATUS_CHANGED', message: 'AI 正在润色商品描述' });
+    const isCurrentRequest = () =>
+      descriptionPolishRequestRef.current?.requestId === requestId;
+    const typewriter = createTextTypewriter((character) => {
+      if (!isCurrentRequest()) {
+        return;
+      }
+      setDescriptionPolish((session) =>
+        session?.requestId === requestId && session.status === 'streaming'
+          ? { ...session, streamedDescription: `${session.streamedDescription}${character}` }
+          : session
+      );
+    });
+    descriptionTypewriterRef.current = { requestId, player: typewriter };
     try {
-      const preview = await services.expandDraft(settings, draft);
-      if (workflowGeneration !== workflowGenerationRef.current) {
+      const result = await services.polishDescription(settings, draft, {
+        signal: controller.signal,
+        onDelta: (delta) => {
+          if (!isCurrentRequest()) {
+            return;
+          }
+          typewriter.push(delta);
+        }
+      });
+      await typewriter.finish();
+      clearDescriptionTypewriter(requestId);
+      if (!isCurrentRequest()) {
+        return;
+      }
+      const latestDraft = latestDraftRef.current;
+      if (latestDraft?.id !== draft.id) {
         return;
       }
       dispatch({
-        type: 'EXPANSION_RECEIVED',
-        draftId,
-        draftUpdatedAt,
-        preview,
-        now: new Date().toISOString()
+        type: 'DRAFT_CHANGED',
+        draft: {
+          ...latestDraft,
+          description: result.description,
+          updatedAt: new Date().toISOString()
+        }
+      });
+      setDescriptionPolish({
+        requestId,
+        draftId: draft.id,
+        originalDescription,
+        streamedDescription: result.description,
+        status: 'completed'
+      });
+      dispatch({
+        type: 'AI_POLISH_STATUS_CHANGED',
+        message: 'AI 商品描述已生成，请检查内容'
       });
     } catch (error) {
-      if (workflowGeneration !== workflowGenerationRef.current) {
+      typewriter.cancel();
+      clearDescriptionTypewriter(requestId);
+      if (!isCurrentRequest()) {
         return;
       }
-      dispatch({
-        type: 'EXPANSION_FAILED',
-        draftId,
-        draftUpdatedAt,
-        message: errorMessage(error)
-      });
+      restoreDescription(draft.id, originalDescription);
+      setDescriptionPolish(null);
+      dispatch({ type: 'OPERATION_FAILED', message: errorMessage(error) });
+    } finally {
+      if (isCurrentRequest()) {
+        descriptionPolishRequestRef.current = null;
+      }
     }
+  };
+
+  const stopDescriptionPolish = () => {
+    const session = descriptionPolish;
+    if (session?.status !== 'streaming') {
+      return;
+    }
+    descriptionPolishRequestIdRef.current += 1;
+    descriptionPolishRequestRef.current?.controller.abort();
+    descriptionPolishRequestRef.current = null;
+    cancelDescriptionTypewriter();
+    restoreDescription(session.draftId, session.originalDescription);
+    setDescriptionPolish(null);
+    dispatch({
+      type: 'AI_POLISH_STATUS_CHANGED',
+      message: 'AI 润色已停止，商品描述已恢复'
+    });
+  };
+
+  const closeDescriptionRestore = () => {
+    restoreDescriptionFocusTargetRef.current = 'restore';
+    setIsRestoreConfirmationOpen(false);
+  };
+
+  const confirmDescriptionRestore = () => {
+    const session = descriptionPolish;
+    if (session?.status !== 'completed') {
+      restoreDescriptionFocusTargetRef.current = 'polish';
+      setIsRestoreConfirmationOpen(false);
+      return;
+    }
+    restoreDescription(session.draftId, session.originalDescription);
+    setDescriptionPolish(null);
+    restoreDescriptionFocusTargetRef.current = 'polish';
+    setIsRestoreConfirmationOpen(false);
+    dispatch({ type: 'AI_POLISH_STATUS_CHANGED', message: '已恢复初始商品描述' });
   };
 
   const fillDraft = async () => {
@@ -359,6 +539,24 @@ export function App({ services }: { services: SidePanelServices }) {
     dispatch({ type: 'DRAFT_RESTORED', draft });
   };
 
+  const deleteLogs = async () => {
+    if (isDeletingLogs) {
+      return;
+    }
+    setIsDeletingLogs(true);
+    setDeleteLogsError('');
+    try {
+      await services.clearLogs();
+      setLogs([]);
+      setIsDeleteLogsConfirmationOpen(false);
+    } catch (error) {
+      setDeleteLogsError(`删除运行记录失败：${errorMessage(error)}`);
+      setIsDeleteLogsConfirmationOpen(false);
+    } finally {
+      setIsDeletingLogs(false);
+    }
+  };
+
   const isResetConfirmationCurrent = (confirmation: ResetConfirmation): boolean => {
     const draft = latestDraftRef.current;
     return draft?.id === confirmation.draftId && draft.updatedAt === confirmation.draftUpdatedAt;
@@ -389,6 +587,12 @@ export function App({ services }: { services: SidePanelServices }) {
     videoUploadRequestRef.current += 1;
     setIsUploadingImages(false);
     setIsUploadingVideos(false);
+    descriptionPolishRequestIdRef.current += 1;
+    descriptionPolishRequestRef.current?.controller.abort();
+    descriptionPolishRequestRef.current = null;
+    cancelDescriptionTypewriter();
+    setDescriptionPolish(null);
+    setIsRestoreConfirmationOpen(false);
     setIsResetting(true);
     try {
       await draftSaveQueue.current;
@@ -670,8 +874,12 @@ export function App({ services }: { services: SidePanelServices }) {
     }
   };
 
+  const isDescriptionPolishing = descriptionPolish?.status === 'streaming';
   const isBusy =
-    state.phase === 'parsing' || state.phase === 'expanding' || state.phase === 'filling';
+    state.phase === 'parsing' ||
+    state.phase === 'expanding' ||
+    state.phase === 'filling' ||
+    isDescriptionPolishing;
   const draftReadyToFill =
     state.draft !== null &&
     state.draft.title.trim().length > 0 &&
@@ -681,22 +889,39 @@ export function App({ services }: { services: SidePanelServices }) {
     state.draft.price > 0 &&
     (state.draft.originalPrice === undefined ||
       (Number.isFinite(state.draft.originalPrice) && state.draft.originalPrice > 0)) &&
+    (state.draft.shippingMethod !== '一口价' ||
+      (state.draft.shippingFee !== undefined &&
+        Number.isFinite(state.draft.shippingFee) &&
+        state.draft.shippingFee > 0)) &&
+    state.draft.images.length > 0 &&
     state.draft.images.every((image) => image.loadStatus === 'loaded');
   const fillDisabled = !draftReadyToFill || isBusy || state.loginState === 'logged-out';
-  const expansionDisabled =
+  const polishDisabled =
     state.draft === null ||
-    isBusy ||
-    (state.draft.title.trim().length === 0 && state.draft.description.trim().length === 0);
+    (!isDescriptionPolishing && isBusy) ||
+    state.draft.description.trim().length === 0;
+  const activeDescriptionPolish =
+    state.draft !== null && descriptionPolish?.draftId === state.draft.id
+      ? descriptionPolish
+      : null;
+  const displayedDescription =
+    activeDescriptionPolish?.status === 'streaming'
+      ? activeDescriptionPolish.streamedDescription
+      : (state.draft?.description ?? '');
+  const hasRestorableDescription = activeDescriptionPolish?.status === 'completed';
 
   return (
     <div className="app-shell">
-      <div inert={resetConfirmation !== null}>
+      <div inert={resetConfirmation !== null || isRestoreConfirmationOpen}>
         <header className="app-header">
           <div className="brand-mark" aria-hidden="true">
             闲
           </div>
           <div className="brand-copy">
-            <strong>闲鱼上架助手</strong>
+            <strong>
+              闲鱼上架助手
+              {appVersion ? <span className="brand-version">（v{appVersion}）</span> : null}
+            </strong>
             <span>整理商品，确认后填表</span>
           </div>
         </header>
@@ -793,6 +1018,8 @@ export function App({ services }: { services: SidePanelServices }) {
               ) : (
                 <ProductEditor
                   draft={state.draft}
+                  descriptionValue={displayedDescription}
+                  isDescriptionStreaming={isDescriptionPolishing}
                   onChange={(draft) => dispatch({ type: 'DRAFT_CHANGED', draft })}
                   onImageLoadStatus={(id, loadStatus) =>
                     dispatch({ type: 'IMAGE_LOAD_STATUS_CHANGED', id, loadStatus })
@@ -821,24 +1048,47 @@ export function App({ services }: { services: SidePanelServices }) {
             />
           ) : null}
 
-          {state.activeView === 'logs' ? <OperationLog entries={logs} /> : null}
+          {state.activeView === 'logs' ? (
+            <OperationLog
+              entries={logs}
+              statusMessage={deleteLogsError}
+              onDeleteRequested={() => {
+                setDeleteLogsError('');
+                setIsDeleteLogsConfirmationOpen(true);
+              }}
+            />
+          ) : null}
         </main>
 
         <footer className="action-dock">
           <p>最终发布需在闲鱼页面手动完成</p>
           <div className="button-row">
             <button
-              className="button button--secondary"
+              ref={aiPolishButtonRef}
+              className={
+                isDescriptionPolishing
+                  ? 'button button--stop'
+                  : 'button button--secondary'
+              }
               type="button"
-              disabled={expansionDisabled}
-              aria-busy={state.phase === 'expanding'}
-              onClick={() => void expandDraft()}
+              disabled={!isDescriptionPolishing && polishDisabled}
+              aria-busy={isDescriptionPolishing}
+              onClick={() =>
+                isDescriptionPolishing ? stopDescriptionPolish() : void polishDescription()
+              }
             >
-              {state.phase === 'expanding' ? (
-                <span className="ai-expansion-spinner" aria-hidden="true" />
-              ) : null}
-              {state.phase === 'expanding' ? 'AI 扩写中' : 'AI 扩写'}
+              {isDescriptionPolishing ? '停止润色' : 'AI 润色'}
             </button>
+            {hasRestorableDescription ? (
+              <button
+                ref={restoreDescriptionButtonRef}
+                className="button button--quiet"
+                type="button"
+                onClick={() => setIsRestoreConfirmationOpen(true)}
+              >
+                恢复
+              </button>
+            ) : null}
             <button
               className="button button--primary button--wide"
               type="button"
@@ -862,6 +1112,30 @@ export function App({ services }: { services: SidePanelServices }) {
           onConfirm={() => void resetWorkflow(resetConfirmation)}
         />
       )}
+
+      {isRestoreConfirmationOpen ? (
+        <ConfirmDialog
+          title="恢复初始描述"
+          description="恢复后，当前 AI 润色内容将被初始商品描述替换，其他商品信息不受影响。"
+          cancelLabel="取消"
+          confirmLabel="确认恢复"
+          isConfirming={false}
+          onCancel={closeDescriptionRestore}
+          onConfirm={confirmDescriptionRestore}
+        />
+      ) : null}
+
+      {isDeleteLogsConfirmationOpen ? (
+        <ConfirmDialog
+          title="删除运行记录"
+          description="删除后，当前浏览器中保存的全部运行记录将无法恢复，商品草稿和 AI 配置不受影响。"
+          cancelLabel="取消"
+          confirmLabel="确认删除"
+          isConfirming={isDeletingLogs}
+          onCancel={() => setIsDeleteLogsConfirmationOpen(false)}
+          onConfirm={() => void deleteLogs()}
+        />
+      ) : null}
     </div>
   );
 }

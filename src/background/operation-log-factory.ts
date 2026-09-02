@@ -1,7 +1,8 @@
 import type { RuntimeMessage } from '../domain/messages';
 import { parseParsedProduct } from '../domain/messages';
-import type { ProductDraft } from '../domain/product';
-import { parseXianyuFillResult, type FillResult } from '../xianyu/fill';
+import { getRemoteImageUrl, type ProductDraft } from '../domain/product';
+import type { DescriptionPolishResult } from '../ai/validation';
+import { parseXianyuFillResult, type FillField, type FillResult } from '../xianyu/fill';
 import { parseXianyuLoginCheckResult } from '../xianyu/login';
 import {
   sanitizeLogEntry,
@@ -18,6 +19,18 @@ const OPERATION_LABELS: Record<RuntimeMessage['type'], string> = {
   CHECK_XIANYU_LOGIN: '登录状态检查',
   FILL_XIANYU_DRAFT: '填入闲鱼',
   OPEN_XIANYU_LOGIN: '打开闲鱼登录页'
+};
+
+const FILL_FIELD_LABELS: Record<FillField, string> = {
+  title: '标题',
+  price: '售价',
+  originalPrice: '原价',
+  description: '描述',
+  shippingMethod: '发货方式',
+  shippingFee: '邮费金额',
+  supportsPickup: '支持自提',
+  images: '商品图片',
+  video: '商品视频'
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -47,6 +60,8 @@ function snapshotFromDraft(
     ...(draft.price === null ? {} : { price: draft.price }),
     ...(draft.originalPrice === undefined ? {} : { originalPrice: draft.originalPrice }),
     shippingMethod: draft.shippingMethod,
+    ...(draft.shippingFee === undefined ? {} : { shippingFee: draft.shippingFee }),
+    supportsPickup: draft.supportsPickup,
     categoryNote: draft.categoryNote,
     selectedImageCount: draft.images.length,
     ...(draft.videos.length === 0
@@ -93,8 +108,13 @@ function fillDetails(value: unknown): OperationLogDetails {
     return { result: '闲鱼表单填写完成' };
   }
   const result: FillResult = parsed.value;
-  const filled = result.filled.length === 0 ? '未填入字段' : `已填入：${result.filled.join('、')}`;
-  const skipped = result.skipped.map((entry) => `${entry.field}：${entry.reason}`);
+  const filled =
+    result.filled.length === 0
+      ? '未填入字段'
+      : `已填入：${result.filled.map((field) => FILL_FIELD_LABELS[field]).join('、')}`;
+  const skipped = result.skipped.map(
+    (entry) => `${FILL_FIELD_LABELS[entry.field]}：${entry.reason}`
+  );
   return {
     result: skipped.length === 0 ? filled : `${filled}；部分跳过，请核对详情`,
     ...(result.warnings.length + skipped.length === 0
@@ -123,6 +143,7 @@ function buildSuccessDetails(
           source: {
             platform: product.platform,
             canonicalUrl: product.canonicalUrl,
+            imageUrls: product.images.flatMap((image) => getRemoteImageUrl(image) ?? []),
             fields: {
               title: product.title.trim().length > 0,
               description: product.description.trim().length > 0,
@@ -200,6 +221,48 @@ export function createSuccessLogEntry(
     operationLabel: OPERATION_LABELS[message.type],
     ...(success.displayTitle === undefined ? {} : { displayTitle: success.displayTitle }),
     ...(success.details === undefined ? {} : { details: success.details })
+  });
+}
+
+export function createAiPolishSuccessLogEntry(
+  draft: ProductDraft,
+  result: DescriptionPolishResult,
+  id: string,
+  timestamp: string
+): OperationLogEntry {
+  return sanitizeLogEntry({
+    id,
+    timestamp,
+    stage: 'ai',
+    outcome: 'success',
+    message: 'AI 商品描述已生成',
+    displayTitle: draft.title,
+    operationLabel: 'AI 润色',
+    details: {
+      draft: snapshotFromDraft(draft, { description: result.description }),
+      ...(result.factWarnings.length === 0 ? {} : { warnings: result.factWarnings }),
+      result: 'AI 商品描述已生成'
+    }
+  });
+}
+
+export function createAiPolishFailureLogEntry(
+  draft: ProductDraft,
+  error: string,
+  code: string,
+  id: string,
+  timestamp: string
+): OperationLogEntry {
+  return sanitizeLogEntry({
+    id,
+    timestamp,
+    stage: 'ai',
+    outcome: 'failure',
+    message: 'AI 润色失败',
+    displayTitle: draft.title,
+    operationLabel: 'AI 润色',
+    code,
+    details: { draft: snapshotFromDraft(draft), error }
   });
 }
 

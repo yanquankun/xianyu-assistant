@@ -91,12 +91,10 @@ test.describe('闲鱼上架助手扩展', () => {
     });
     await context.route('https://item.taobao.com/**', async (route) => {
       const url = route.request().url();
-      const html = new URL(url).searchParams.get('id') === '200'
-        ? titlelessProductHtml(
-            'https://item.taobao.com/item.htm?id=200',
-            fixtureServer.baseUrl
-          )
-        : taobaoHtml.replaceAll('https://img.example.com', fixtureServer.baseUrl);
+      const html =
+        new URL(url).searchParams.get('id') === '200'
+          ? titlelessProductHtml('https://item.taobao.com/item.htm?id=200', fixtureServer.baseUrl)
+          : taobaoHtml.replaceAll('https://img.example.com', fixtureServer.baseUrl);
       await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html });
     });
     await context.route('https://item.jd.com/**', async (route) => {
@@ -128,7 +126,7 @@ test.describe('闲鱼上架助手扩展', () => {
     await context?.close();
   });
 
-  test('AI 加载后直接回填，登录刷新并生成可展开的运行记录', async ({ browserName }) => {
+  test('AI 流式润色描述，登录刷新并生成可展开的运行记录', async ({ browserName }) => {
     test.setTimeout(60_000);
     expect(browserName).toBe('chromium');
     if (context === undefined) {
@@ -151,23 +149,68 @@ test.describe('闲鱼上架助手扩展', () => {
     await panel.getByRole('button', { name: '解析商品' }).click();
     await expect(panel.getByLabel('商品标题')).toHaveValue('测试商品');
 
-    await panel.getByRole('button', { name: 'AI 扩写' }).click();
-    await expect(panel.getByRole('button', { name: 'AI 扩写中' })).toBeDisabled();
-    await expect(panel.getByLabel('商品标题')).toHaveValue('AI 整理后的测试商品');
-    await expect(panel.getByRole('heading', { name: 'AI 文案预览' })).toHaveCount(0);
+    const descriptionInput = panel.getByRole('textbox', { name: '商品描述', exact: true });
+    await descriptionInput.evaluate((element) => {
+      element.style.height = '20rem';
+    });
+    await panel.getByRole('button', { name: 'AI 润色' }).click();
+    await expect(panel.getByRole('button', { name: '停止润色' })).toBeEnabled();
+    await expect(descriptionInput).toHaveValue('');
+    await expect(panel.getByLabel('商品标题')).toHaveValue('测试商品');
+    const polishOverlay = panel.getByRole('status', { name: 'AI 正在润色商品描述' });
+    await expect(polishOverlay).toBeVisible();
+    const overlayLayout = await panel.locator('.description-input-frame').evaluate((frame) => {
+      const textarea = frame.querySelector('textarea');
+      const overlay = frame.querySelector('.description-polish-overlay');
+      if (textarea === null || overlay === null) {
+        throw new Error('描述输入框或润色遮罩不存在');
+      }
+      const textareaRect = textarea.getBoundingClientRect();
+      const overlayRect = overlay.getBoundingClientRect();
+      return {
+        widthDifference: Math.abs(textareaRect.width - overlayRect.width),
+        heightDifference: Math.abs(textareaRect.height - overlayRect.height),
+        pointerEvents: getComputedStyle(overlay).pointerEvents,
+        backgroundColor: getComputedStyle(overlay).backgroundColor
+      };
+    });
+    expect(overlayLayout.widthDifference).toBeLessThanOrEqual(1);
+    expect(overlayLayout.heightDifference).toBeLessThanOrEqual(1);
+    expect(overlayLayout.pointerEvents).toBe('none');
+    expect(overlayLayout.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    const completedDescription = '商品信息清晰完整，请以当前页面和实物为准。';
+    await expect.poll(() => descriptionInput.inputValue()).not.toBe('');
+    const partiallyTypedDescription = await descriptionInput.inputValue();
+    await expect(polishOverlay).toHaveText('正在生成…');
+    expect(Array.from(partiallyTypedDescription).length).toBeLessThan(
+      Array.from(completedDescription).length
+    );
+    await expect(descriptionInput).toHaveValue(completedDescription);
+    await expect(polishOverlay).toHaveCount(0);
+    await expect(panel.getByRole('button', { name: '恢复' })).toBeVisible();
 
     await panel.getByRole('button', { name: '运行记录' }).click();
-    const aiLog = panel
-      .locator('.log-list__toggle')
-      .filter({ hasText: 'AI 整理后的测试商品' })
-      .first();
+    const aiLog = panel.locator('.log-list__toggle').filter({ hasText: '测试商品' }).first();
     await expect(aiLog).toBeVisible();
     await aiLog.click();
     const details = panel.locator('.log-list__details').first();
+    await expect
+      .poll(() =>
+        details
+          .locator('.log-details__fields')
+          .first()
+          .evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)
+      )
+      .toBe(1);
     await expect(details).toContainText(sourceUrl);
-    await expect(details).toContainText('AI 整理后的测试商品');
-    await expect(details).toContainText('商品信息已整理，请以当前页面和实物为准。');
+    await expect(details).toContainText('测试商品');
+    await expect(details).toContainText('商品信息清晰完整，请以当前页面和实物为准。');
     expect(fixtureServer.requests.length).toBeGreaterThanOrEqual(1);
+
+    await panel.getByRole('button', { name: '删除记录' }).click();
+    await expect(panel.getByRole('dialog', { name: '删除运行记录' })).toBeVisible();
+    await panel.getByRole('button', { name: '确认删除' }).click();
+    await expect(panel.getByText('尚无运行记录。')).toBeVisible();
   });
 
   test('手动草稿显示步骤 02，取消返回保留内容，确认后不再恢复草稿', async ({ browserName }) => {
@@ -247,6 +290,9 @@ test.describe('闲鱼上架助手扩展', () => {
     await panel.getByRole('button', { name: '填入闲鱼' }).click();
     await expect(panel.getByText('内容已填入闲鱼，请检查页面并手动发布')).toBeVisible();
     await expect(xianyuPage.locator('input[name="title"]')).toHaveValue('本地图片商品');
+    await expect(xianyuPage.locator('input[name="price"]')).toHaveValue('66');
+    await expect(xianyuPage.locator('input[name="shippingMethod"][value="包邮"]')).toBeChecked();
+    await expect(xianyuPage.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
     await expect(xianyuPage.locator('input[name="images"]')).toHaveJSProperty('files.length', 2);
     const publishClicks: number | null = await xianyuPage.evaluate(() => {
       const scope = globalThis as typeof globalThis & { __publishClicks?: unknown };

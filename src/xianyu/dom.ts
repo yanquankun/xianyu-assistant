@@ -26,7 +26,11 @@ export function findTextControl(
     }
     const control =
       label.control ??
-      label.querySelector<HTMLElement>('input, textarea, [contenteditable="true"]');
+      label.querySelector<HTMLElement>('input, textarea, [contenteditable="true"]') ??
+      label
+        .closest<HTMLElement>('.ant-form-item')
+        ?.querySelector<HTMLElement>('input, textarea, [contenteditable="true"]') ??
+      null;
     if (control !== null && visible(control)) {
       return control;
     }
@@ -74,7 +78,7 @@ function labeledFileInput(document: Document, labelText: string): HTMLInputEleme
       continue;
     }
     const input = label.control ?? label.querySelector<HTMLInputElement>('input[type="file"]');
-    if (input instanceof HTMLInputElement && input.type === 'file' && visible(input)) {
+    if (input instanceof HTMLInputElement && input.type === 'file') {
       return input;
     }
   }
@@ -83,7 +87,7 @@ function labeledFileInput(document: Document, labelText: string): HTMLInputEleme
 
 export function findImageFileInput(document: Document): HTMLInputElement | null {
   const preferred = document.querySelector<HTMLInputElement>('input[name="images"][type="file"]');
-  if (preferred !== null && visible(preferred) && !isVideoFileInput(preferred)) {
+  if (preferred !== null && !isVideoFileInput(preferred)) {
     return preferred;
   }
   const labeled = labeledFileInput(document, '图片');
@@ -91,11 +95,7 @@ export function findImageFileInput(document: Document): HTMLInputElement | null 
     return labeled;
   }
   for (const input of document.querySelectorAll<HTMLInputElement>('input[type="file"]')) {
-    if (
-      visible(input) &&
-      !isVideoFileInput(input) &&
-      (input.accept.includes('image') || input.multiple)
-    ) {
+    if (!isVideoFileInput(input) && (input.accept.includes('image') || input.multiple)) {
       return input;
     }
   }
@@ -104,11 +104,11 @@ export function findImageFileInput(document: Document): HTMLInputElement | null 
 
 export function findVideoFileInput(document: Document): HTMLInputElement | null {
   const preferred = document.querySelector<HTMLInputElement>('input[name="video"][type="file"]');
-  if (preferred !== null && visible(preferred) && isVideoFileInput(preferred)) {
+  if (preferred !== null && isVideoFileInput(preferred)) {
     return preferred;
   }
   for (const input of document.querySelectorAll<HTMLInputElement>('input[type="file"]')) {
-    if (visible(input) && isVideoFileInput(input)) {
+    if (isVideoFileInput(input)) {
       return input;
     }
   }

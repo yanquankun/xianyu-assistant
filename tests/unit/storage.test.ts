@@ -62,6 +62,7 @@ const draft: ProductDraft = {
   warnings: [],
   confidence: 'high',
   shippingMethod: '包邮',
+  supportsPickup: false,
   categoryNote: '',
   updatedAt: '2026-08-31T10:00:00.000Z'
 };
@@ -124,6 +125,26 @@ describe('createLocalStore', () => {
 
     await expect(store.getDraft()).resolves.toMatchObject({ platform: 'tmall' });
     expect(area.data.productDraft).toMatchObject({ platform: 'tmall' });
+  });
+
+  it('读取旧草稿时迁移发货方式并关闭默认自提', async () => {
+    const area = new MemoryStorageArea();
+    const legacyDraft: Record<string, unknown> = {
+      ...draft,
+      shippingMethod: '邮费另议'
+    };
+    Reflect.deleteProperty(legacyDraft, 'supportsPickup');
+    area.data.productDraft = legacyDraft;
+    const store = createLocalStore(area);
+
+    await expect(store.getDraft()).resolves.toMatchObject({
+      shippingMethod: '按距离计费',
+      supportsPickup: false
+    });
+    expect(area.data.productDraft).toMatchObject({
+      shippingMethod: '按距离计费',
+      supportsPickup: false
+    });
   });
 
   it('存储中没有值时返回安全默认值', async () => {
@@ -231,5 +252,24 @@ describe('createLocalStore', () => {
     expect(logs).toHaveLength(100);
     expect(logs.some((entry) => entry.id === 'invalid-log')).toBe(false);
     expect(logs.at(-1)?.id).toBe('log-100');
+  });
+
+  it('删除全部运行记录后本地存储和读取结果都为空', async () => {
+    const area = new MemoryStorageArea();
+    const store = createLocalStore(area);
+    await store.appendLog({
+      id: 'log-to-delete',
+      timestamp: '2026-09-02T14:00:00.000Z',
+      stage: 'ai',
+      outcome: 'failure',
+      message: '待删除记录'
+    });
+    const clearLogs = (store as unknown as { clearLogs?: () => Promise<void> }).clearLogs;
+
+    expect(clearLogs).toBeDefined();
+    await clearLogs?.call(store);
+
+    await expect(store.getLogs()).resolves.toEqual([]);
+    expect(area.data.operationLogs).toBeUndefined();
   });
 });

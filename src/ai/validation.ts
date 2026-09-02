@@ -7,6 +7,11 @@ export interface ExpansionPreview {
   factWarnings: string[];
 }
 
+export interface DescriptionPolishResult {
+  description: string;
+  factWarnings: string[];
+}
+
 const HIGH_RISK_CLAIMS = ['全新', '正品', '保修', '官方授权', '七天包退'] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -80,5 +85,16 @@ export function validateExpansion(input: unknown, draft: ProductDraft): Expansio
     description,
     warnings: readWarnings(input.warnings),
     factWarnings: createFactWarnings(title, description, draft)
+  };
+}
+
+export function validatePolishedDescription(
+  description: unknown,
+  draft: ProductDraft
+): DescriptionPolishResult {
+  const normalized = readRequiredText({ description }, 'description');
+  return {
+    description: normalized,
+    factWarnings: createFactWarnings(draft.title, normalized, draft)
   };
 }

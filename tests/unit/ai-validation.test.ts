@@ -22,6 +22,7 @@ const draft: ProductDraft = {
   warnings: [],
   confidence: 'high',
   shippingMethod: '包邮',
+  supportsPickup: false,
   categoryNote: '',
   updatedAt: '2026-08-31T10:00:00.000Z'
 };

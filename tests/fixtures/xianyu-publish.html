@@ -9,7 +9,16 @@
     <form data-testid="publish-form">
       <label>标题<input name="title" /></label>
       <label>价格<input name="price" type="number" /></label>
+      <label>原价<input name="originalPrice" type="number" /></label>
       <label>描述<textarea name="description"></textarea></label>
+      <fieldset>
+        <legend>发货方式</legend>
+        <label>包邮<input name="shippingMethod" type="radio" value="包邮" /></label>
+        <label>按距离计费<input name="shippingMethod" type="radio" value="按距离计费" /></label>
+        <label>一口价<input name="shippingMethod" type="radio" value="一口价" /></label>
+        <label>无需邮寄<input name="shippingMethod" type="radio" value="无需邮寄" /></label>
+      </fieldset>
+      <span>支持自提<button type="button" role="switch" aria-checked="false"></button></span>
       <label>图片<input name="images" type="file" accept="image/*" multiple /></label>
       <label
         >视频<input name="video" type="file" accept="video/mp4,video/quicktime" multiple

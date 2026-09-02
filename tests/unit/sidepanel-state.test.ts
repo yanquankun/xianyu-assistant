@@ -39,6 +39,7 @@ const draft: ProductDraft = {
   warnings: [],
   confidence: 'high',
   shippingMethod: '包邮',
+  supportsPickup: false,
   categoryNote: '',
   updatedAt: '2026-08-31T10:00:00.000Z'
 };
@@ -100,7 +101,7 @@ describe('reduceWorkflow', () => {
       { ...draft, description: '描述' },
       { ...draft, price: 1 },
       { ...draft, originalPrice: 2 },
-      { ...draft, shippingMethod: '邮费另议' },
+      { ...draft, shippingMethod: '按距离计费' },
       { ...draft, categoryNote: '分类备注' },
       { ...draft, canonicalUrl: 'https://item.jd.com/2.html' },
       {
