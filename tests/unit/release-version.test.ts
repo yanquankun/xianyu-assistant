@@ -17,12 +17,25 @@ const projectRoot = process.cwd();
 const versionScript = resolve(projectRoot, 'scripts/release-version.mjs');
 const releaseScript = resolve(projectRoot, 'scripts/release.sh');
 const githubAuthScript = resolve(projectRoot, 'scripts/check-github-auth.sh');
+const releaseUiScript = resolve(projectRoot, 'scripts/release-ui.sh');
 
 function runVersionCommand(...args: string[]) {
   return spawnSync(process.execPath, [versionScript, ...args], {
     cwd: projectRoot,
     encoding: 'utf8'
   });
+}
+
+function runUiFunction(functionCall: string, ...args: string[]) {
+  return spawnSync(
+    'bash',
+    ['-c', `source "$1"; ${functionCall}`, 'release-ui-test', releaseUiScript, ...args],
+    {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      env: { ...process.env, RELEASE_UI_PLAIN: '1' }
+    }
+  );
 }
 
 describe('发布版本工具', () => {
@@ -35,6 +48,70 @@ describe('发布版本工具', () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('必须在交互式终端中运行');
+  });
+
+  it('将版本选项渲染为短行纵向菜单并默认选中 z', () => {
+    const result = runUiFunction(
+      'render_version_menu "$2" "$3" "$4" "$5" "$6"',
+      '0',
+      '0.1.3',
+      '0.1.4',
+      '0.2.0',
+      '1.0.0'
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(
+      [
+        '请选择版本升级类型',
+        '',
+        '❯ z  补丁版本  0.1.3 → 0.1.4（默认）',
+        '  y  次版本    0.1.3 → 0.2.0',
+        '  x  主版本    0.1.3 → 1.0.0',
+        '',
+        '↑/↓ 选择，Enter 确认，q 取消',
+        ''
+      ].join('\n')
+    );
+  });
+
+  it.each([
+    ['0', 'up', '2'],
+    ['0', 'down', '1'],
+    ['2', 'down', '0']
+  ])('从索引 %s 向 %s 循环移动到 %s', (current, direction, expected) => {
+    const result = runUiFunction('move_selection "$2" "$3" "$4"', current, direction, '3');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(expected);
+  });
+
+  it('最终确认使用纵向单选并默认选中取消', () => {
+    const result = runUiFunction('render_confirmation_menu "$2"', '1');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('  确认发布');
+    expect(result.stdout).toContain('❯ 取消并恢复版本（默认）');
+  });
+
+  it('在文字之前输出 ANSI 高亮样式', () => {
+    const result = spawnSync(
+      'bash',
+      [
+        '-c',
+        'source "$1"; ui_print_line "选中项" "${UI_BOLD}${UI_CYAN}"',
+        'release-ui-color-test',
+        releaseUiScript
+      ],
+      {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        env: { ...process.env, RELEASE_UI_FORCE_COLOR: '1' }
+      }
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('\u001B[1m\u001B[36m选中项\u001B[0m');
   });
 
   it('使用本地 token 快速检查 gh 登录状态', () => {
