@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ProductDraft } from '../../src/domain/product';
-import { validateExpansion } from '../../src/ai/validation';
+import { validateExpansion, validatePolishedDescription } from '../../src/ai/validation';
 
 const draft: ProductDraft = {
   id: 'draft-validation',
@@ -91,5 +91,16 @@ describe('validateExpansion', () => {
     expect(() =>
       validateExpansion({ title: '标题', description: '描'.repeat(5_001), warnings: [] }, draft)
     ).toThrow('AI 描述超过 5000 个字符');
+  });
+});
+
+describe('validatePolishedDescription', () => {
+  it('移除模型输出中的空白行', () => {
+    expect(
+      validatePolishedDescription(
+        '九成新键盘\n\n具体信息：\n  \n价格：199 元',
+        draft
+      ).description
+    ).toBe('九成新键盘\n具体信息：\n价格：199 元');
   });
 });

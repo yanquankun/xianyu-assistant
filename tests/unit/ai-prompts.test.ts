@@ -80,7 +80,7 @@ describe('buildDescriptionPolishMessages', () => {
     expect(userMessage).toEqual({
       role: 'user',
       content: [
-        '请根据以下当前表单中的全部可用商品信息进行二手场景润色扩写。所有字段都可以作为文案依据，但不得把“来源平台”写入结果。严格采用第一行商品名称、后续每行“字段：内容”的格式，只输出商品描述正文。',
+        '请根据以下当前表单中的全部可用商品信息进行二手场景润色扩写。所有字段都可以作为文案依据，但不得把“来源平台”写入结果。严格采用第一行商品名称、第二行“具体信息：”、从第三行开始每行“字段：内容”的格式，只输出商品描述正文。',
         '',
         '来源平台：京东',
         '商品标题：12KG 洗衣机',
@@ -131,7 +131,9 @@ describe('buildDescriptionPolishMessages', () => {
     const content = systemMessage?.content ?? '';
 
     expect(content).toContain('第一行只写整理后的商品名称');
-    expect(content).toContain('后续每行只写一项已明确提供的信息');
+    expect(content).toContain('第二行固定写“具体信息：”');
+    expect(content).toContain('从第三行开始，每行只写一项已明确提供的信息');
+    expect(content).toContain('不得插入空白行');
     expect(content).toContain('使用“字段：内容”的格式');
     expect(content).toContain('成色、型号、规格、颜色、尺寸、材质、核心功能、配置');
     expect(content).toContain('出售原因、购买时间、价格、邮寄、自提、注意');
@@ -146,7 +148,9 @@ describe('buildDescriptionPolishMessages', () => {
     expect(content.lastIndexOf('使用“字段：内容”的格式')).toBeGreaterThan(
       content.lastIndexOf(settings.systemInstruction)
     );
-    expect(userMessage?.content).toContain('第一行商品名称、后续每行“字段：内容”');
+    expect(userMessage?.content).toContain(
+      '第一行商品名称、第二行“具体信息：”、从第三行开始每行“字段：内容”'
+    );
   });
 
   it('缺少二手实物信息时禁止模型编造成色和使用状态', () => {

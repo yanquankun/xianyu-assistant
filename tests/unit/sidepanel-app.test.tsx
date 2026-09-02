@@ -868,19 +868,19 @@ describe('App', () => {
 
     const options = await optionsReady.promise;
     act(() => {
-      options.onDelta('第一段第二段');
+      options.onDelta('第一段\n\n第二段');
     });
     expect(description).toHaveValue('第');
     expect(screen.getByRole('status', { name: 'AI 正在润色商品描述' })).toHaveTextContent(
       '正在生成…'
     );
-    await waitFor(() => expect(description).toHaveValue('第一段第二段'));
+    await waitFor(() => expect(description).toHaveValue('第一段\n第二段'));
 
-    completion.resolve({ description: '第一段第二段', factWarnings: ['仅写入运行记录'] });
+    completion.resolve({ description: '第一段\n第二段', factWarnings: ['仅写入运行记录'] });
 
     expect(await screen.findByRole('button', { name: '恢复' })).toBeVisible();
     expect(screen.getByLabelText('商品标题')).toHaveValue('润色前标题');
-    expect(screen.getByLabelText('商品描述')).toHaveValue('第一段第二段');
+    expect(screen.getByLabelText('商品描述')).toHaveValue('第一段\n第二段');
     expect(screen.getByRole('button', { name: 'AI 润色' })).toBeEnabled();
     expect(screen.queryByRole('status', { name: 'AI 正在润色商品描述' })).toBeNull();
     expect(screen.queryByText('仅写入运行记录')).toBeNull();

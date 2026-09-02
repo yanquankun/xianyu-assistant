@@ -575,6 +575,48 @@ async function waitForImageCondition(condition: () => boolean): Promise<void> {
   throw new Error('闲鱼图片列表同步超时，请检查图片上传状态后重试');
 }
 
+function normalizedText(element: Element): string {
+  return element.textContent.replace(/\s+/g, '');
+}
+
+function imageDeletionConfirmButton(remove: HTMLElement): HTMLButtonElement | null {
+  if (!remove.classList.contains('ant-popover-open')) {
+    return null;
+  }
+  for (const popconfirm of remove.ownerDocument.querySelectorAll<HTMLElement>('.ant-popconfirm')) {
+    const title = popconfirm.querySelector<HTMLElement>('.ant-popconfirm-title');
+    if (title === null || normalizedText(title) !== '确定要删除这张图片吗？') {
+      continue;
+    }
+    const confirm = Array.from(
+      popconfirm.querySelectorAll<HTMLButtonElement>('.ant-popconfirm-buttons button')
+    ).find((button) => normalizedText(button) === '确认');
+    if (confirm !== undefined) {
+      return confirm;
+    }
+  }
+  return null;
+}
+
+async function confirmImageDeletionIfRequested(
+  remove: HTMLElement,
+  list: HTMLElement,
+  previousCount: number
+): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (imagePreviewItems(list).length < previousCount) {
+      return;
+    }
+    const confirm = imageDeletionConfirmButton(remove);
+    if (confirm !== null) {
+      confirm.click();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error('未找到闲鱼图片删除确认按钮，请检查页面后重试');
+}
+
 async function syncImageFileInput(
   input: HTMLInputElement,
   images: readonly TransferableImage[]
@@ -604,6 +646,7 @@ async function syncImageFileInput(
       throw new Error('未找到闲鱼图片删除控件，已停止同步以避免重复图片');
     }
     remove.click();
+    await confirmImageDeletionIfRequested(remove, list, previousCount);
     await waitForImageCondition(() => imagePreviewItems(list).length < previousCount);
   }
 

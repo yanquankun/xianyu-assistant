@@ -1,4 +1,5 @@
 import type { ProductDraft } from '../domain/product';
+import { removeBlankDescriptionLines } from './description-format';
 
 export interface ExpansionPreview {
   title: string;
@@ -92,7 +93,9 @@ export function validatePolishedDescription(
   description: unknown,
   draft: ProductDraft
 ): DescriptionPolishResult {
-  const normalized = readRequiredText({ description }, 'description');
+  const normalized = removeBlankDescriptionLines(
+    readRequiredText({ description }, 'description')
+  );
   return {
     description: normalized,
     factWarnings: createFactWarnings(draft.title, normalized, draft)

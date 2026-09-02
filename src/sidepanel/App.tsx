@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 
 import type { AiConnectionResult } from '../ai/client';
 import type { DescriptionPolishOptions } from '../ai/client';
+import { removeBlankDescriptionLines } from '../ai/description-format';
 import type {
   DescriptionPolishResult,
   ExpansionPreview as ExpansionPreviewValue
@@ -384,7 +385,12 @@ export function App({
       }
       setDescriptionPolish((session) =>
         session?.requestId === requestId && session.status === 'streaming'
-          ? { ...session, streamedDescription: `${session.streamedDescription}${character}` }
+          ? {
+              ...session,
+              streamedDescription: removeBlankDescriptionLines(
+                `${session.streamedDescription}${character}`
+              )
+            }
           : session
       );
     });

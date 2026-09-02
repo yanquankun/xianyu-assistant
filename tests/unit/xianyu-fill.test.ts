@@ -51,12 +51,27 @@ describe('fillXianyuDraft', () => {
     const list = document.createElement('div');
     list.className = 'imgList--test';
     form.insertBefore(list, imageInput.parentElement);
+    let confirmClicks = 0;
     list.addEventListener('click', (event) => {
       const target = event.target;
       if (!(target instanceof HTMLElement) || !target.matches('[class*="delete-btn--"]')) {
         return;
       }
-      target.closest('[role="button"]')?.remove();
+      target.classList.add('ant-popover-open');
+      const popconfirm = document.createElement('div');
+      popconfirm.className = 'ant-popconfirm';
+      popconfirm.innerHTML = `
+        <div class="ant-popconfirm-title">确定要删除这张图片吗？</div>
+        <div class="ant-popconfirm-buttons">
+          <button type="button" class="ant-btn-primary">确 认</button>
+        </div>
+      `;
+      popconfirm.querySelector('button')?.addEventListener('click', () => {
+        confirmClicks += 1;
+        target.closest('[role="button"]')?.remove();
+        popconfirm.remove();
+      });
+      document.body.append(popconfirm);
     });
     let uploadEvents = 0;
     imageInput.addEventListener('change', () => {
@@ -99,9 +114,18 @@ describe('fillXianyuDraft', () => {
     expect(uploadEvents).toBe(1);
     expect(list.querySelectorAll('[class*="preview-container--"]')).toHaveLength(2);
 
-    await fillXianyuDraft(document, { ...validPayload, images: [secondImage] });
+    vi.useFakeTimers();
+    const deletionPromise = fillXianyuDraft(document, {
+      ...validPayload,
+      images: [secondImage]
+    });
+    await vi.runAllTimersAsync();
+    const deletionResult = await deletionPromise;
+    vi.useRealTimers();
 
     expect(uploadEvents).toBe(1);
+    expect(confirmClicks).toBe(1);
+    expect(deletionResult.filled).toContain('images');
     expect(list.querySelectorAll('[class*="preview-container--"]')).toHaveLength(1);
     expect(list.textContent).toContain('image-2.png');
   });
