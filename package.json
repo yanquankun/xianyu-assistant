@@ -20,7 +20,8 @@
     "check": "wxt prepare && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "build:unpacked": "wxt build && node scripts/collect-build-artifacts.mjs --unpacked-only",
     "build": "wxt zip && node scripts/collect-build-artifacts.mjs",
-    "zip": "pnpm build"
+    "zip": "pnpm build",
+    "release": "bash scripts/release.sh"
   },
   "dependencies": {
     "opentype.js": "2.0.0",

@@ -71,8 +71,8 @@ pnpm build
 构建产物为：
 
 ```text
-dist/xianyu-assistant-0.1.3-chrome.zip
-dist/xianyu-assistant-0.1.3-chrome.crx
+dist/xianyu-assistant-<version>-chrome.zip
+dist/xianyu-assistant-<version>-chrome.crx
 .output/chrome-mv3/
 ```
 
@@ -113,6 +113,18 @@ pnpm build:unpacked
 远程 AI Base URL 必须使用 HTTPS，防止 API Key 通过明文 HTTP 传输。仅本机开发用的 `localhost`、`*.localhost`、`127.0.0.1` 和 `::1` 允许使用 HTTP。
 
 API Key 只保存在当前浏览器扩展的本地存储中，不写入仓库，也不会出现在运行日志中。它仍然属于本机敏感数据：请勿共享 Chrome Profile，并在不再使用时移除扩展或清除扩展数据。
+
+## 创建 GitHub Release
+
+在干净的 `main` 分支中运行交互式发布命令：
+
+```bash
+pnpm release
+```
+
+使用方向键单选升级 `x.y.z` 中的哪一位，默认升级 `z`。脚本要求填写非空的 Tag/Release 说明，并在最终确认前完成版本校验、质量检查和生产构建。确认后会提交 `package.json`、推送 `main`，创建 `v<version>` GitHub Release，并上传同版本的 CRX 和 Chrome 应用商店 ZIP。
+
+`package.json.version` 是唯一版本源；生产 Manifest、Git tag、Release 名称和产物文件名均由该字段派生。新版本必须高于当前 `package.json` 版本及本地、远程已有的所有正式 `vX.Y.Z` tag。
 
 ## 使用流程
 

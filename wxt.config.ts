@@ -1,5 +1,7 @@
 import { defineConfig } from 'wxt';
 
+import packageJson from './package.json' with { type: 'json' };
+
 export const REQUIRED_PERMISSIONS = [
   'sidePanel',
   'storage',
@@ -9,12 +11,11 @@ export const REQUIRED_PERMISSIONS = [
   'tabs'
 ] as const;
 
-export default defineConfig({
-  modules: ['@wxt-dev/module-react'],
-  manifest: ({ mode }) => ({
+export function createExtensionManifest(version: string, mode: string) {
+  return {
     name: '闲鱼上架助手',
     description: '解析淘宝、天猫和京东商品，生成可编辑文案并填入闲鱼发布页。',
-    version: '0.1.3',
+    version,
     minimum_chrome_version: '116',
     permissions: REQUIRED_PERMISSIONS,
     host_permissions: [
@@ -48,5 +49,10 @@ export default defineConfig({
       48: 'icon/48.png',
       128: 'icon/128.png'
     }
-  })
+  };
+}
+
+export default defineConfig({
+  modules: ['@wxt-dev/module-react'],
+  manifest: ({ mode }) => createExtensionManifest(packageJson.version, mode)
 });
