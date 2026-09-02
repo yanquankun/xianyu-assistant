@@ -1,5 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -10,6 +16,7 @@ import { createExtensionManifest } from '../../wxt.config';
 const projectRoot = process.cwd();
 const versionScript = resolve(projectRoot, 'scripts/release-version.mjs');
 const releaseScript = resolve(projectRoot, 'scripts/release.sh');
+const githubAuthScript = resolve(projectRoot, 'scripts/check-github-auth.sh');
 
 function runVersionCommand(...args: string[]) {
   return spawnSync(process.execPath, [versionScript, ...args], {
@@ -28,6 +35,51 @@ describe('发布版本工具', () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('必须在交互式终端中运行');
+  });
+
+  it('使用本地 token 快速检查 gh 登录状态', () => {
+    const temporaryDirectory = mkdtempSync(join(tmpdir(), 'xianyu-gh-auth-'));
+    const fakeGhPath = join(temporaryDirectory, 'gh');
+    const argumentsPath = join(temporaryDirectory, 'arguments.txt');
+    writeFileSync(
+      fakeGhPath,
+      `#!/usr/bin/env bash\nprintf '%s' "$*" > "${argumentsPath}"\n`
+    );
+    chmodSync(fakeGhPath, 0o755);
+
+    try {
+      const result = spawnSync('bash', [githubAuthScript], {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${temporaryDirectory}:${process.env.PATH ?? ''}` }
+      });
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(argumentsPath, 'utf8')).toBe('auth token --hostname github.com');
+      expect(result.stdout).toContain('GitHub CLI 登录检查通过');
+    } finally {
+      rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('本地没有 gh token 时返回明确登录指令', () => {
+    const temporaryDirectory = mkdtempSync(join(tmpdir(), 'xianyu-gh-auth-failure-'));
+    const fakeGhPath = join(temporaryDirectory, 'gh');
+    writeFileSync(fakeGhPath, '#!/usr/bin/env bash\nexit 1\n');
+    chmodSync(fakeGhPath, 0o755);
+
+    try {
+      const result = spawnSync('bash', [githubAuthScript], {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${temporaryDirectory}:${process.env.PATH ?? ''}` }
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('请先执行 gh auth login');
+    } finally {
+      rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
   });
 
   it('生产 Manifest 使用传入的 package.json 版本', () => {

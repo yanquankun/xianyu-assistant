@@ -11,6 +11,7 @@ SCRIPT_DIRECTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIRECTORY}/.." && pwd -P)"
 PACKAGE_PATH="${PROJECT_ROOT}/package.json"
 VERSION_TOOL="${SCRIPT_DIRECTORY}/release-version.mjs"
+GITHUB_AUTH_CHECK="${SCRIPT_DIRECTORY}/check-github-auth.sh"
 
 cd "${PROJECT_ROOT}"
 
@@ -27,7 +28,7 @@ current_branch="$(git branch --show-current)"
 [[ "${current_branch}" == 'main' ]] || fail "当前分支是 ${current_branch:-detached HEAD}，请切换到 main。"
 [[ -z "$(git status --porcelain)" ]] || fail '工作区不干净，请先提交或处理现有改动。'
 git remote get-url origin >/dev/null 2>&1 || fail '没有找到 origin 远程仓库。'
-gh auth status --hostname github.com >/dev/null 2>&1 || fail 'GitHub CLI 尚未登录，请先执行 gh auth login。'
+bash "${GITHUB_AUTH_CHECK}"
 
 package_name="$(node -p "require('./package.json').name")"
 current_version="$(node -p "require('./package.json').version")"
